@@ -156,8 +156,22 @@ class MessageSender:
             cleaned_recipients = []
             for r in recipients[key]:
                 if r.strip():
-                    # Убираем @ если есть, и другие лишние символы
-                    clean_r = r.strip().replace('@', '').replace(' ', '')
+                    clean_r = r.strip()
+                    
+                    # Обрабатываем ссылки Telegram
+                    if 't.me/' in clean_r:
+                        # Извлекаем username из ссылки
+                        if 't.me/joinchat/' in clean_r or 't.me/+' in clean_r:
+                            # Это приватная ссылка на канал/группу, используем как есть
+                            clean_r = clean_r.split('t.me/')[1]
+                        else:
+                            # Это обычный username
+                            clean_r = clean_r.split('t.me/')[1].split('?')[0]  # убираем параметры
+                    
+                    # Убираем @ если есть в начале
+                    if clean_r.startswith('@'):
+                        clean_r = clean_r[1:]
+                    
                     if clean_r:
                         cleaned_recipients.append(clean_r)
             recipients[key] = cleaned_recipients

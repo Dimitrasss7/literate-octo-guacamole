@@ -245,15 +245,23 @@ class TelegramManager:
             
             print(f"Creating client for account {account_id}")
             
-            # Расшифровываем сессию
-            session_data = self.cipher.decrypt(account.session_data.encode())
-            
-            # Создаем временный файл сессии
-            session_name = f"temp_session_{account_id}"
-            session_path = os.path.join(SESSIONS_DIR, session_name)
-            
-            with open(f"{session_path}.session", "wb") as f:
-                f.write(session_data)
+            try:
+                # Расшифровываем сессию
+                session_data = self.cipher.decrypt(account.session_data.encode())
+                print(f"Session data decrypted successfully, size: {len(session_data)} bytes")
+                
+                # Создаем временный файл сессии
+                session_name = f"temp_session_{account_id}"
+                session_path = os.path.join(SESSIONS_DIR, session_name)
+                
+                with open(f"{session_path}.session", "wb") as f:
+                    f.write(session_data)
+                    
+                print(f"Session file created: {session_path}.session")
+                
+            except Exception as decrypt_error:
+                print(f"Failed to decrypt session: {str(decrypt_error)}")
+                raise Exception(f"Не удалось расшифровать сессию: {str(decrypt_error)}")
             
             # Создаем клиент
             client = Client(
@@ -264,21 +272,53 @@ class TelegramManager:
                 sleep_threshold=60
             )
             
-            await client.start()
-            print(f"Client started for account {account_id}")
-            
-            # Проверяем, что клиент работает
-            me = await client.get_me()
-            print(f"Client verified for {me.first_name}")
-            
-            self.clients[account_id] = client
-            
-            # Обновляем статус
-            account.status = "online"
-            account.last_activity = datetime.utcnow()
-            db.commit()
-            
-            return client
+            try:
+                await client.start()
+                print(f"Client started for account {account_id}")
+                
+                # Проверяем, что клиент работает
+                me = await client.get_me()
+                print(f"Client verified for {me.first_name}")
+                
+                self.clients[account_id] = client
+                
+                # Обновляем статус
+                account.status = "online"
+                account.last_activity = datetime.utcnow()
+                db.commit()
+                
+                return client
+                
+            except Exception as start_error:
+                print(f"Error starting client: {str(start_error)}")
+                # Пробуем удалить временный файл сессии и создать заново
+                try:
+                    temp_session_file = f"{session_path}.session"
+                    if os.path.exists(temp_session_file):
+                        os.remove(temp_session_file)
+                    # Создаем заново из исходной сессии
+                    original_session_file = None
+                    for file in os.listdir(SESSIONS_DIR):
+                        if file.startswith(f"session_{account.phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')}"):
+                            original_session_file = os.path.join(SESSIONS_DIR, file)
+                            break
+                    
+                    if original_session_file and os.path.exists(original_session_file):
+                        print(f"Trying to use original session file: {original_session_file}")
+                        import shutil
+                        shutil.copy2(original_session_file, temp_session_file)
+                        await client.start()
+                        me = await client.get_me()
+                        print(f"Client started with original session for {me.first_name}")
+                        self.clients[account_id] = client
+                        account.status = "online"
+                        account.last_activity = datetime.utcnow()
+                        db.commit()
+                        return client
+                except Exception as fallback_error:
+                    print(f"Fallback also failed: {str(fallback_error)}")
+                
+                raise start_error
             
         except Exception as e:
             print(f"Error getting client for account {account_id}: {str(e)}")
@@ -312,16 +352,23 @@ class TelegramManager:
                 
                 # Очищаем chat_id от лишних символов
                 clean_chat_id = chat_id.strip()
-                if clean_chat_id.startswith('@'):
-                    clean_chat_id = clean_chat_id[1:]
                 
-                print(f"Sending message to clean_chat_id: {clean_chat_id}")
+                # Для приватных ссылок (с +) добавляем обратно, для обычных username убираем @
+                if clean_chat_id.startswith('+'):
+                    # Приватная ссылка - используем как есть
+                    target_chat = f"https://t.me/{clean_chat_id}"
+                elif clean_chat_id.startswith('@'):
+                    target_chat = clean_chat_id[1:]  # убираем @
+                else:
+                    target_chat = clean_chat_id
+                
+                print(f"Sending message to target_chat: {target_chat}")
                 
                 # Отправляем сообщение
                 if file_path and os.path.exists(file_path):
-                    result = await client.send_document(clean_chat_id, file_path, caption=message)
+                    result = await client.send_document(target_chat, file_path, caption=message)
                 else:
-                    result = await client.send_message(clean_chat_id, message)
+                    result = await client.send_message(target_chat, message)
                 
                 print(f"Message sent successfully: {result}")
                 

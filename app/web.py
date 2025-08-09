@@ -315,16 +315,34 @@ async def get_accounts_api(db: Session = Depends(get_db)):
     return JSONResponse(accounts_data)
 
 @app.get("/api/contacts/{account_id}")
-async def get_contacts(account_id: int):
-    """Получение контактов аккаунта"""
-    result = await telegram_manager.get_user_contacts(account_id)
-    return JSONResponse(result)
+async def get_contacts(account_id: int, db: Session = Depends(get_db)):
+    """API для получения контактов аккаунта"""
+    try:
+        print(f"API запрос контактов для аккаунта {account_id}")
+        result = await telegram_manager.get_user_contacts(account_id)
+        print(f"Результат получения контактов: {result}")
+        return JSONResponse(result)
+    except Exception as e:
+        print(f"Error in get_contacts API: {str(e)}")
+        return JSONResponse(
+            {"status": "error", "message": f"Ошибка получения контактов: {str(e)}"},
+            status_code=500
+        )
 
 @app.get("/api/chats/{account_id}")
-async def get_chats(account_id: int):
-    """Получение всех чатов аккаунта"""
-    result = await telegram_manager.get_user_chats(account_id)
-    return JSONResponse(result)
+async def get_chats(account_id: int, db: Session = Depends(get_db)):
+    """API для получения чатов аккаунта"""
+    try:
+        print(f"API запрос чатов для аккаунта {account_id}")
+        result = await telegram_manager.get_user_chats(account_id)
+        print(f"Результат получения чатов: {result}")
+        return JSONResponse(result)
+    except Exception as e:
+        print(f"Error in get_chats API: {str(e)}")
+        return JSONResponse(
+            {"status": "error", "message": f"Ошибка получения чатов: {str(e)}"},
+            status_code=500
+        )
 
 @app.get("/api/stats")
 async def get_stats(db: Session = Depends(get_db)):

@@ -167,6 +167,9 @@ class MessageSender:
             account_index = 0
             total_sent = 0
 
+            # Счетчик для расчета задержки для всех сообщений
+            total_message_count = 0
+            
             for recipient_type, recipient_list in recipients.items():
                 if not self.active_campaigns.get(campaign_id, False):
                     break
@@ -176,7 +179,7 @@ class MessageSender:
                     continue
 
                 # Отправляем все сообщения с использованием Telegram scheduling
-                for i, recipient in enumerate(recipient_list):
+                for recipient in recipient_list:
                     if not self.active_campaigns.get(campaign_id, False):
                         break
 
@@ -195,8 +198,9 @@ class MessageSender:
 
                     print(f"Scheduling message to {recipient} via account {account.id}")
 
-                    # Рассчитываем задержку для текущего сообщения (начиная с первого интервала)
-                    current_delay = (i + 1) * campaign.delay_seconds
+                    # Рассчитываем задержку для текущего сообщения (увеличиваем для каждого сообщения)
+                    current_delay = total_message_count * campaign.delay_seconds
+                    total_message_count += 1
                     
                     # Отправляем сообщение с отложенной отправкой через Telegram
                     result = await telegram_manager.send_message(
@@ -207,22 +211,22 @@ class MessageSender:
                         schedule_seconds=current_delay
                     )
 
-                print(f"Schedule result: {result}")
+                    print(f"Schedule result for {recipient}: {result}")
 
-                # Логируем результат
-                self._log_send_result(
-                    campaign_id, account.id, recipient, 
-                    recipient_type, result
-                )
+                    # Логируем результат
+                    self._log_send_result(
+                        campaign_id, account.id, recipient, 
+                        recipient_type, result
+                    )
 
-                if result["status"] == "success":
-                    total_sent += 1
-                    if current_delay > 0:
-                        print(f"Message scheduled successfully to {recipient} (will be sent in {current_delay} seconds by Telegram)")
+                    if result["status"] == "success":
+                        total_sent += 1
+                        if current_delay > 0:
+                            print(f"Message scheduled successfully to {recipient} (will be sent in {current_delay} seconds by Telegram)")
+                        else:
+                            print(f"Message sent immediately to {recipient}")
                     else:
-                        print(f"Message sent immediately to {recipient}")
-                else:
-                    print(f"Failed to schedule message to {recipient}: {result.get('message', 'Unknown error')}")
+                        print(f"Failed to schedule message to {recipient}: {result.get('message', 'Unknown error')}")
 
             # Завершаем кампанию
             campaign.status = "completed"

@@ -591,13 +591,15 @@ class TelegramManager:
                 if not recipient.startswith('@') and not recipient.startswith('+') and not recipient.isdigit() and not recipient.startswith('-'):
                     recipient = f"@{recipient}"
 
-                # Всегда используем встроенный планировщик Telegram
+                # Используем встроенный планировщик Telegram для отложенных сообщений
                 from datetime import datetime, timedelta
                 
                 # Рассчитываем время отправки через Telegram планировщик
                 if schedule_seconds > 0:
-                    schedule_date = datetime.utcnow() + timedelta(seconds=schedule_seconds)
-                    print(f"Сообщение будет запланировано в Telegram на: {schedule_date}")
+                    # Добавляем минимальную задержку в 30 секунд, так как Telegram требует это для планирования
+                    min_delay = max(30, schedule_seconds)
+                    schedule_date = datetime.utcnow() + timedelta(seconds=min_delay)
+                    print(f"Сообщение будет запланировано в Telegram на: {schedule_date} (через {min_delay} секунд)")
                 else:
                     # Для немедленной отправки не используем планировщик
                     schedule_date = None
@@ -616,7 +618,7 @@ class TelegramManager:
                                 caption=message if message else None,
                                 schedule_date=schedule_date
                             )
-                            print(f"Файл успешно запланирован к отправке через Telegram на {schedule_date}")
+                            print(f"✓ Файл успешно запланирован к отправке через Telegram на {schedule_date}")
                         else:
                             print(f"Отправка файла немедленно: {file_path}")
                             # Отправляем файл немедленно
@@ -625,7 +627,7 @@ class TelegramManager:
                                 document=file_path,
                                 caption=message if message else None
                             )
-                            print(f"Файл успешно отправлен немедленно")
+                            print(f"✓ Файл успешно отправлен немедленно")
                     else:
                         if schedule_date:
                             # Отправляем только текст через планировщик
@@ -634,14 +636,14 @@ class TelegramManager:
                                 text=message,
                                 schedule_date=schedule_date
                             )
-                            print(f"Текстовое сообщение успешно запланировано через Telegram на {schedule_date}")
+                            print(f"✓ Текстовое сообщение успешно запланировано через Telegram на {schedule_date}")
                         else:
                             # Отправляем текст немедленно
                             sent_message = await client.send_message(
                                 chat_id=recipient,
                                 text=message
                             )
-                            print(f"Текстовое сообщение отправлено немедленно")
+                            print(f"✓ Текстовое сообщение отправлено немедленно")
                 except Exception as send_error:
                     print(f"Ошибка при отправке: {send_error}")
                     raise send_error

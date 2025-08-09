@@ -599,31 +599,49 @@ class TelegramManager:
                     schedule_date = datetime.utcnow() + timedelta(seconds=schedule_seconds)
                     print(f"Сообщение будет запланировано в Telegram на: {schedule_date}")
                 else:
-                    # Даже для немедленной отправки используем минимальную задержку через планировщик
-                    schedule_date = datetime.utcnow() + timedelta(seconds=1)
-                    print(f"Сообщение будет отправлено через Telegram планировщик на: {schedule_date}")
+                    # Для немедленной отправки не используем планировщик
+                    schedule_date = None
+                    print(f"Сообщение будет отправлено немедленно")
 
                 # Отправляем сообщение через встроенный планировщик Telegram
                 sent_message = None
                 try:
                     if file_path and os.path.exists(file_path):
-                        print(f"Планирование отправки файла: {file_path}")
-                        # Отправляем с файлом через планировщик
-                        sent_message = await client.send_document(
-                            chat_id=recipient,
-                            document=file_path,
-                            caption=message if message else None,
-                            schedule_date=schedule_date
-                        )
-                        print(f"Файл успешно запланирован к отправке через Telegram на {schedule_date}")
+                        if schedule_date:
+                            print(f"Планирование отправки файла: {file_path}")
+                            # Отправляем с файлом через планировщик
+                            sent_message = await client.send_document(
+                                chat_id=recipient,
+                                document=file_path,
+                                caption=message if message else None,
+                                schedule_date=schedule_date
+                            )
+                            print(f"Файл успешно запланирован к отправке через Telegram на {schedule_date}")
+                        else:
+                            print(f"Отправка файла немедленно: {file_path}")
+                            # Отправляем файл немедленно
+                            sent_message = await client.send_document(
+                                chat_id=recipient,
+                                document=file_path,
+                                caption=message if message else None
+                            )
+                            print(f"Файл успешно отправлен немедленно")
                     else:
-                        # Отправляем только текст через планировщик
-                        sent_message = await client.send_message(
-                            chat_id=recipient,
-                            text=message,
-                            schedule_date=schedule_date
-                        )
-                        print(f"Текстовое сообщение успешно запланировано через Telegram на {schedule_date}")
+                        if schedule_date:
+                            # Отправляем только текст через планировщик
+                            sent_message = await client.send_message(
+                                chat_id=recipient,
+                                text=message,
+                                schedule_date=schedule_date
+                            )
+                            print(f"Текстовое сообщение успешно запланировано через Telegram на {schedule_date}")
+                        else:
+                            # Отправляем текст немедленно
+                            sent_message = await client.send_message(
+                                chat_id=recipient,
+                                text=message
+                            )
+                            print(f"Текстовое сообщение отправлено немедленно")
                 except Exception as send_error:
                     print(f"Ошибка при отправке: {send_error}")
                     raise send_error

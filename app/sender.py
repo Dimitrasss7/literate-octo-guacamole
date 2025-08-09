@@ -175,37 +175,37 @@ class MessageSender:
                 if not message:
                     continue
 
-                # Отправляем все сообщения сразу с использованием Telegram scheduling
-            for i, recipient in enumerate(recipient_list):
-                if not self.active_campaigns.get(campaign_id, False):
-                    break
+                # Отправляем все сообщения с использованием Telegram scheduling
+                for i, recipient in enumerate(recipient_list):
+                    if not self.active_campaigns.get(campaign_id, False):
+                        break
 
-                # Выбираем аккаунт
-                if len(accounts) == 1:
-                    # Используем единственный аккаунт
-                    account = accounts[0]
-                else:
-                    # Выбираем аккаунт по ротации
-                    account = accounts[account_index % len(accounts)]
-                    account_index += 1
+                    # Выбираем аккаунт
+                    if len(accounts) == 1:
+                        # Используем единственный аккаунт
+                        account = accounts[0]
+                    else:
+                        # Выбираем аккаунт по ротации
+                        account = accounts[account_index % len(accounts)]
+                        account_index += 1
 
-                # Проверяем лимиты аккаунта
-                if not self._check_account_limits(account):
-                    continue
+                    # Проверяем лимиты аккаунта
+                    if not self._check_account_limits(account):
+                        continue
 
-                print(f"Scheduling message to {recipient} via account {account.id}")
+                    print(f"Scheduling message to {recipient} via account {account.id}")
 
-                # Рассчитываем задержку для текущего сообщения
-                current_delay = i * campaign.delay_seconds
-                
-                # Отправляем сообщение с отложенной отправкой через Telegram
-                result = await telegram_manager.send_message(
-                    account.id,
-                    recipient,
-                    message,
-                    campaign.attachment_path,
-                    schedule_seconds=current_delay
-                )
+                    # Рассчитываем задержку для текущего сообщения (начиная с первого интервала)
+                    current_delay = (i + 1) * campaign.delay_seconds
+                    
+                    # Отправляем сообщение с отложенной отправкой через Telegram
+                    result = await telegram_manager.send_message(
+                        account.id,
+                        recipient,
+                        message,
+                        campaign.attachment_path,
+                        schedule_seconds=current_delay
+                    )
 
                 print(f"Schedule result: {result}")
 

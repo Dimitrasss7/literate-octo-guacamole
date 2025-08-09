@@ -367,7 +367,7 @@ class TelegramManager:
                     # Проверяем что контакт не None
                     if contact is None:
                         continue
-                        
+
                     # Безопасное получение атрибутов
                     first_name = getattr(contact, 'first_name', '') or ""
                     last_name = getattr(contact, 'last_name', '') or ""
@@ -567,13 +567,13 @@ class TelegramManager:
         try:
             if not recipient or recipient.strip() == "":
                 return None
-                
+
             recipient = recipient.strip()
-            
+
             # Если это уже числовой ID или группа/канал с типом -100..., используем как есть
             if recipient.isdigit() or (recipient.startswith('-') and recipient[1:].isdigit()):
                 return recipient
-            
+
             # Если это username, пробуем получить информацию о пользователе/чате
             if recipient.startswith('@'):
                 recipient = recipient[1:] # Убираем @
@@ -622,6 +622,14 @@ class TelegramManager:
             client = await self._get_client_for_account(account_id)
             if not client:
                 return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
+
+            # Проверяем, что клиент корректно инициализирован
+            try:
+                # Простая проверка работоспособности клиента
+                if not hasattr(client, 'send_document'):
+                    return {"status": "error", "message": "Клиент не готов к работе"}
+            except Exception as client_check_error:
+                return {"status": "error", "message": f"Ошибка проверки клиента: {str(client_check_error)}"}
 
             file_size = os.path.getsize(file_path)
             file_name = os.path.basename(file_path)

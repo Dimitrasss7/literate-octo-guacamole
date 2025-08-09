@@ -585,20 +585,28 @@ class TelegramManager:
                 if not recipient.startswith('@') and not recipient.startswith('+') and not recipient.isdigit() and not recipient.startswith('-'):
                     recipient = f"@{recipient}"
 
-                # Отправляем сообщение напрямую без resolve_peer
-                if file_path and os.path.exists(file_path):
-                    # Отправляем с файлом
-                    sent_message = await client.send_document(
-                        chat_id=recipient,
-                        document=file_path,
-                        caption=message
-                    )
-                else:
-                    # Отправляем только текст
-                    sent_message = await client.send_message(
-                        chat_id=recipient,
-                        text=message
-                    )
+                # Отправляем сообщение
+                sent_message = None
+                try:
+                    if file_path and os.path.exists(file_path):
+                        print(f"Отправка файла: {file_path}")
+                        # Отправляем с файлом
+                        sent_message = await client.send_document(
+                            chat_id=recipient,
+                            document=file_path,
+                            caption=message if message else None
+                        )
+                        print(f"Файл отправлен успешно")
+                    else:
+                        # Отправляем только текст
+                        sent_message = await client.send_message(
+                            chat_id=recipient,
+                            text=message
+                        )
+                        print(f"Текстовое сообщение отправлено успешно")
+                except Exception as send_error:
+                    print(f"Ошибка при отправке: {send_error}")
+                    raise send_error
 
                 # Обновляем статистику аккаунта
                 await self._update_account_stats(account_id)
@@ -607,20 +615,39 @@ class TelegramManager:
                 message_id = None
                 chat_id = None
                 
-                if sent_message:
-                    message_id = getattr(sent_message, 'id', None)
-                    
-                    # Пытаемся получить chat_id разными способами
-                    if hasattr(sent_message, 'chat') and sent_message.chat is not None:
-                        chat_id = getattr(sent_message.chat, 'id', None)
-                    elif hasattr(sent_message, 'peer_id') and sent_message.peer_id is not None:
-                        peer_id = sent_message.peer_id
-                        if hasattr(peer_id, 'user_id'):
-                            chat_id = peer_id.user_id
-                        elif hasattr(peer_id, 'chat_id'):
-                            chat_id = peer_id.chat_id
-                        elif hasattr(peer_id, 'channel_id'):
-                            chat_id = peer_id.channel_id
+                try:
+                    if sent_message:
+                        message_id = getattr(sent_message, 'id', None)
+                        print(f"Message ID: {message_id}")
+                        
+                        # Получаем chat_id из самого сообщения
+                        if hasattr(sent_message, 'chat'):
+                            chat_obj = sent_message.chat
+                            if chat_obj is not None:
+                                chat_id = getattr(chat_obj, 'id', None)
+                                print(f"Chat ID from chat: {chat_id}")
+                        
+                        # Если chat_id не получен, пробуем через peer_id  
+                        if chat_id is None and hasattr(sent_message, 'peer_id'):
+                            peer_id = sent_message.peer_id
+                            if peer_id is not None:
+                                if hasattr(peer_id, 'user_id'):
+                                    chat_id = peer_id.user_id
+                                elif hasattr(peer_id, 'chat_id'):
+                                    chat_id = peer_id.chat_id
+                                elif hasattr(peer_id, 'channel_id'):
+                                    chat_id = peer_id.channel_id
+                                print(f"Chat ID from peer_id: {chat_id}")
+                        
+                        # Если всё еще не получен, попробуем парсить recipient
+                        if chat_id is None:
+                            if recipient.isdigit() or (recipient.startswith('-') and recipient[1:].isdigit()):
+                                chat_id = int(recipient)
+                                print(f"Chat ID from recipient: {chat_id}")
+                
+                except Exception as parse_error:
+                    print(f"Ошибка при парсинге результата сообщения: {parse_error}")
+                    # Продолжаем выполнение, даже если не удалось получить детали
 
                 return {
                     "status": "success",

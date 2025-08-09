@@ -78,9 +78,9 @@ class TelegramManager:
                     await asyncio.sleep(1)
                     sent_code = await client.send_code(phone)
                     self.pending_clients[session_name] = client
-                    
+
                     print(f"Код отправлен на {phone}, hash: {sent_code.phone_code_hash}")
-                    
+
                     return {
                         "status": "code_required",
                         "phone_code_hash": sent_code.phone_code_hash,
@@ -101,7 +101,7 @@ class TelegramManager:
         try:
             # Очищаем код от лишних символов и пробелов
             clean_code = ''.join(filter(str.isdigit, code.strip()))
-            
+
             if len(clean_code) != 5:
                 return {"status": "error", "message": "Код должен содержать ровно 5 цифр"}
 
@@ -121,14 +121,14 @@ class TelegramManager:
 
             # Дополнительная задержка перед попыткой входа
             await asyncio.sleep(1)
-            
+
             try:
                 await client.sign_in(phone, phone_code_hash, clean_code)
             except Exception as sign_in_error:
                 # Если первая попытка не удалась, попробуем еще раз через несколько секунд
                 await asyncio.sleep(3)
                 await client.sign_in(phone, phone_code_hash, clean_code)
-            
+
             me = await client.get_me()
 
             session_path = os.path.join(SESSIONS_DIR, session_name)
@@ -267,143 +267,131 @@ class TelegramManager:
             "password": password
         }
 
-    async def get_simple_client(self, account_id: int) -> Optional[Client]:
-        """Упрощенное получение клиента"""
+    async def _get_client_for_account(self, account_id: int) -> Optional[Client]:
+        """Получение или создание клиента для аккаунта"""
+        if account_id in self.clients and self.clients[account_id].is_connected:
+            return self.clients[account_id]
+
+        # Получаем данные аккаунта
+        db = next(get_db())
         try:
-            # Получаем данные аккаунта
-            db = next(get_db())
-            try:
-                account = db.query(Account).filter(Account.id == account_id).first()
-                if not account or not account.is_active:
-                    print(f"Аккаунт {account_id} неактивен или не найден")
-                    return None
+            account = db.query(Account).filter(Account.id == account_id).first()
+            if not account or not account.is_active:
+                print(f"Аккаунт {account_id} неактивен или не найден")
+                return None
 
-                # Ищем файл сессии
-                phone_clean = account.phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')
+            # Ищем файл сессии
+            phone_clean = account.phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')
 
-                # Список возможных имен сессий
-                possible_names = [
-                    f"session_{phone_clean}",
-                    f"session_{account.phone}",
-                    phone_clean
-                ]
+            # Список возможных имен сессий
+            possible_names = [
+                f"session_{phone_clean}",
+                f"session_{account.phone}",
+                phone_clean
+            ]
 
-                session_file = None
+            session_file = None
+            for name in possible_names:
+                path = os.path.join(SESSIONS_DIR, f"{name}.session")
+                if os.path.exists(path):
+                    session_file = os.path.join(SESSIONS_DIR, name)
+                    print(f"Найден файл сессии: {session_file}.session")
+                    break
+
+            if not session_file:
+                print(f"Файл сессии не найден для аккаунта {account_id}, проверенные пути:")
                 for name in possible_names:
-                    path = os.path.join(SESSIONS_DIR, f"{name}.session")
-                    if os.path.exists(path):
-                        session_file = os.path.join(SESSIONS_DIR, name)
-                        print(f"Найден файл сессии: {session_file}.session")
-                        break
+                    print(f"  - {os.path.join(SESSIONS_DIR, name)}.session")
+                return None
 
-                if not session_file:
-                    print(f"Файл сессии не найден для аккаунта {account_id}, проверенные пути:")
-                    for name in possible_names:
-                        print(f"  - {os.path.join(SESSIONS_DIR, name)}.session")
-                    return None
+            # Создаем клиент
+            client = Client(
+                session_file,
+                api_id=API_ID,
+                api_hash=API_HASH,
+                proxy=self._parse_proxy(account.proxy) if account.proxy else None,
+                sleep_threshold=30,
+                no_updates=True
+            )
 
-                # Создаем клиент
-                client = Client(
-                    session_file,
-                    api_id=API_ID,
-                    api_hash=API_HASH,
-                    proxy=self._parse_proxy(account.proxy) if account.proxy else None,
-                    sleep_threshold=30,
-                    no_updates=True
-                )
-
-                # Проверяем подключение
+            # Проверяем подключение и авторизацию
+            try:
                 if not client.is_connected:
-                    await client.start()
+                    await client.connect()
 
-                # Проверяем авторизацию
-                try:
-                    me = await client.get_me()
-                    print(f"✓ Клиент для аккаунта {account_id} успешно подключен: {me.first_name}")
+                me = await client.get_me()
+                print(f"✓ Клиент для аккаунта {account_id} успешно подключен: {me.first_name}")
 
-                    # Обновляем статус в БД
-                    account.status = "online"
-                    account.last_activity = datetime.utcnow()
-                    db.commit()
+                # Обновляем статус в БД
+                account.status = "online"
+                account.last_activity = datetime.utcnow()
+                db.commit()
 
-                    return client
-                except Exception as auth_error:
-                    print(f"Ошибка авторизации клиента {account_id}: {auth_error}")
+                self.clients[account_id] = client # Сохраняем клиент в кеш
+                return client
+
+            except Exception as auth_error:
+                print(f"Ошибка авторизации клиента {account_id}: {auth_error}")
+                if client.is_connected:
                     await client.stop()
-                    return None
-
-            finally:
-                db.close()
+                return None
 
         except Exception as e:
             print(f"Общая ошибка создания клиента для аккаунта {account_id}: {str(e)}")
             return None
+        finally:
+            db.close()
 
     async def get_user_contacts(self, account_id: int) -> Dict:
-        """Получение контактов из адресной книги пользователя"""
+        """Получение контактов пользователя"""
         try:
-            print(f"=== Получение контактов из адресной книги для аккаунта {account_id} ===")
+            print(f"Получение контактов для аккаунта {account_id}")
 
-            client = await self.get_simple_client(account_id)
+            client = await self._get_client_for_account(account_id)
             if not client:
                 return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
 
-            contacts = []
-
             try:
-                # Получаем контакты из адресной книги
+                # Проверяем, что клиент подключен
+                if not client.is_connected:
+                    await client.connect()
+
+                # Получаем контакты через Pyrogram
+                contacts_list = []
                 async for contact in client.get_contacts():
-                    # Получаем данные контакта
-                    first_name = getattr(contact, 'first_name', '') or ''
-                    last_name = getattr(contact, 'last_name', '') or ''
-                    username = getattr(contact, 'username', '') or ''
-                    phone = getattr(contact, 'phone', '') or ''
-
-                    # Формируем имя для отображения
-                    display_name = f"{first_name} {last_name}".strip()
-                    if not display_name and username:
-                        display_name = f"@{username}"
-                    elif not display_name:
-                        display_name = f"Пользователь {contact.id}"
-
-                    contact_info = {
+                    contact_data = {
                         "id": contact.id,
-                        "first_name": first_name,
-                        "last_name": last_name,
-                        "username": username,
-                        "phone": phone,
-                        "display_name": display_name
+                        "first_name": contact.first_name or "",
+                        "last_name": contact.last_name or "",
+                        "username": contact.username or "",
+                        "phone": getattr(contact, 'phone_number', '') or "",
+                        "is_bot": contact.is_bot if hasattr(contact, 'is_bot') else False,
+                        "is_verified": contact.is_verified if hasattr(contact, 'is_verified') else False,
+                        "is_premium": contact.is_premium if hasattr(contact, 'is_premium') else False,
                     }
+                    contacts_list.append(contact_data)
 
-                    contacts.append(contact_info)
-                    print(f"✓ Контакт: {display_name} ({phone})")
-
-                print(f"✓ Найдено {len(contacts)} контактов в адресной книге")
-
-                # Закрываем клиент
-                await client.disconnect()
-
+                print(f"Найдено {len(contacts_list)} контактов для аккаунта {account_id}")
                 return {
                     "status": "success",
-                    "contacts": contacts,
-                    "total": len(contacts)
+                    "contacts": contacts_list,
+                    "count": len(contacts_list)
                 }
 
             except Exception as e:
-                print(f"Ошибка получения контактов: {str(e)}")
-                await client.disconnect()
+                print(f"Ошибка получения контактов: {e}")
                 return {"status": "error", "message": f"Ошибка получения контактов: {str(e)}"}
 
         except Exception as e:
-            print(f"Общая ошибка получения контактов: {str(e)}")
-            return {"status": "error", "message": str(e)}
+            print(f"Общая ошибка при получении контактов: {e}")
+            return {"status": "error", "message": f"Не удалось получить контакты: {str(e)}"}
 
     async def get_user_dialogs(self, account_id: int) -> Dict:
         """Получение контактов из диалогов (старый метод)"""
         try:
             print(f"=== Получение диалогов для аккаунта {account_id} ===")
 
-            client = await self.get_simple_client(account_id)
+            client = await self._get_client_for_account(account_id)
             if not client:
                 return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
 
@@ -478,7 +466,7 @@ class TelegramManager:
         try:
             print(f"=== Получение чатов для аккаунта {account_id} ===")
 
-            client = await self.get_simple_client(account_id)
+            client = await self._get_client_for_account(account_id)
             if not client:
                 return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
 
@@ -541,12 +529,30 @@ class TelegramManager:
                 pass
             del self.clients[account_id]
 
+    async def disconnect_client(self, account_id: int) -> bool:
+        """Отключение клиента"""
+        try:
+            if account_id in self.clients:
+                client = self.clients[account_id]
+                try:
+                    if hasattr(client, 'is_connected') and client.is_connected:
+                        await client.disconnect()
+                except Exception as disconnect_error:
+                    print(f"Error during disconnect for client {account_id}: {disconnect_error}")
+                    # Продолжаем удаление из словаря даже если disconnect не удался
+
+                del self.clients[account_id]
+                return True
+        except Exception as e:
+            print(f"Error disconnecting client {account_id}: {e}")
+        return False
+
     async def send_message(self, account_id: int, chat_id: str, message: str, file_path: Optional[str] = None) -> Dict:
         """Отправка сообщения"""
         try:
             print(f"Отправка сообщения в {chat_id} от аккаунта {account_id}")
 
-            client = await self.get_simple_client(account_id)
+            client = await self._get_client_for_account(account_id)
             if not client:
                 return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
 

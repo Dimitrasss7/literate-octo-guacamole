@@ -29,7 +29,6 @@ class Campaign(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String)
-    description = Column(Text, nullable=True)
     channel_message = Column(Text, nullable=True)
     group_message = Column(Text, nullable=True)
     private_message = Column(Text, nullable=True)

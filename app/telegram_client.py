@@ -267,17 +267,21 @@ class TelegramManager:
         }
 
     async def get_client(self, account_id: int) -> Optional[Client]:
-        """Получение клиента для аккаунта - новая упрощённая версия"""
+        """Получение клиента для аккаунта - исправленная версия"""
         # Сначала проверяем кэш
         if account_id in self.clients:
             client = self.clients[account_id]
             try:
                 # Быстрая проверка что клиент работает
-                if client.is_connected:
+                if hasattr(client, 'is_connected') and client.is_connected:
                     return client
             except:
                 pass
             # Удаляем неработающий клиент из кэша
+            try:
+                await client.stop()
+            except:
+                pass
             del self.clients[account_id]
 
         db = next(get_db())
@@ -285,129 +289,173 @@ class TelegramManager:
         try:
             account = db.query(Account).filter(Account.id == account_id).first()
             if not account or not account.is_active:
+                print(f"Account {account_id} not found or inactive")
                 return None
 
-            # Поиск файла сессии
+            # Поиск файла сессии - проверяем все возможные варианты
             phone_clean = account.phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')
             session_file = None
             
-            # Проверяем возможные имена файлов
+            # Список всех возможных имен файлов сессий
             possible_names = [
                 f"session_{phone_clean}.session",
-                f"session_{account.phone}.session",
+                f"session_{account.phone}.session", 
+                f"{account.phone}.session",
                 f"{phone_clean}.session"
             ]
             
+            print(f"Looking for session file for account {account_id}, phone: {account.phone}")
+            print(f"Checking files: {possible_names}")
+            
             for name in possible_names:
                 path = os.path.join(SESSIONS_DIR, name)
+                print(f"Checking: {path}")
                 if os.path.exists(path):
                     session_file = path
+                    print(f"Found session file: {path}")
                     break
             
             if not session_file:
                 print(f"No session file found for account {account_id}")
+                # Показываем что есть в папке
+                session_files = [f for f in os.listdir(SESSIONS_DIR) if f.endswith('.session')]
+                print(f"Available session files: {session_files}")
                 return None
 
-            session_path = session_file.replace('.session', '')
+            # Убираем .session из пути для Pyrogram
+            session_name = session_file.replace('.session', '')
             
-            # Создаем клиент с минимальными настройками
-            client = Client(
-                name=session_path,
-                api_id=API_ID,
-                api_hash=API_HASH,
-                proxy=self._parse_proxy(account.proxy) if account.proxy else None,
-                no_updates=True,
-                takeout=False
-            )
+            print(f"Creating client with session: {session_name}")
+            
+            # Создаем клиент с правильными настройками
+            try:
+                client = Client(
+                    name=session_name,
+                    api_id=API_ID,
+                    api_hash=API_HASH,
+                    proxy=self._parse_proxy(account.proxy) if account.proxy else None,
+                    no_updates=True,
+                    takeout=False,
+                    workdir=SESSIONS_DIR  # Указываем рабочую папку
+                )
 
-            # Запускаем клиент
-            await client.start()
-            
-            # Проверяем что он работает
-            me = await client.get_me()
-            
-            # Кэшируем клиент
-            self.clients[account_id] = client
-            
-            # Обновляем статус
-            account.status = "online"
-            account.last_activity = datetime.utcnow()
-            db.commit()
-            
-            return client
+                print(f"Starting client for account {account_id}...")
+                
+                # Подключаемся без интерактивного ввода
+                await client.connect()
+                
+                # Проверяем авторизацию
+                try:
+                    me = await client.get_me()
+                    print(f"Client authorized as: {me.first_name} (ID: {me.id})")
+                    
+                    # Кэшируем клиент
+                    self.clients[account_id] = client
+                    
+                    # Обновляем статус
+                    account.status = "online"
+                    account.last_activity = datetime.utcnow()
+                    db.commit()
+                    
+                    return client
+                    
+                except Exception as auth_error:
+                    print(f"Client not authorized: {auth_error}")
+                    await client.disconnect()
+                    return None
+                    
+            except Exception as client_error:
+                print(f"Error creating client: {client_error}")
+                return None
 
         except Exception as e:
-            print(f"Error creating client for account {account_id}: {str(e)}")
+            print(f"Error in get_client for account {account_id}: {str(e)}")
             if account:
                 account.status = "error"
-                db.commit()
+                try:
+                    db.commit()
+                except:
+                    pass
             return None
         finally:
-            db.close()
+            try:
+                db.close()
+            except:
+                pass
 
     async def get_user_contacts(self, account_id: int) -> Dict:
-        """Быстрое получение контактов пользователя"""
+        """Быстрое получение контактов пользователя с тайм-аутом"""
         try:
             print(f"=== Быстрая загрузка контактов для аккаунта {account_id} ===")
             
-            client = await self.get_client(account_id)
+            # Устанавливаем тайм-аут на получение клиента
+            try:
+                client = await asyncio.wait_for(self.get_client(account_id), timeout=10.0)
+            except asyncio.TimeoutError:
+                print(f"Тайм-аут при подключении к аккаунту {account_id}")
+                return {"status": "error", "message": "Тайм-аут подключения к аккаунту"}
+            
             if not client:
                 return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
 
             contacts = []
             
             try:
-                # Получаем информацию о себе
-                me = await client.get_me()
+                # Получаем информацию о себе с тайм-аутом
+                me = await asyncio.wait_for(client.get_me(), timeout=5.0)
                 print(f"Пользователь: {me.first_name} (ID: {me.id})")
                 
-                # Быстро получаем только первые 30 диалогов
+                # Быстро получаем только первые 15 диалогов с тайм-аутом
                 dialog_count = 0
                 print("Быстро сканируем диалоги...")
                 
-                async for dialog in client.get_dialogs(limit=30):
-                    try:
-                        dialog_count += 1
-                        chat = dialog.chat
-                        
-                        # Проверяем только приватные чаты (не группы/каналы)
-                        if (hasattr(chat, 'type') and 
-                            str(chat.type) == 'ChatType.PRIVATE' and
-                            chat.id != me.id and chat.id != 777000 and
-                            not getattr(chat, 'is_bot', False) and
-                            not getattr(chat, 'is_deleted', False)):
-                            
-                            # Быстро формируем данные контакта
-                            first_name = getattr(chat, 'first_name', '') or ''
-                            last_name = getattr(chat, 'last_name', '') or ''
-                            username = getattr(chat, 'username', '') or ''
-                            
-                            # Формируем имя для отображения
-                            if first_name or last_name:
-                                display_name = f"{first_name} {last_name}".strip()
-                            elif username:
-                                display_name = f"@{username}"
-                            else:
-                                display_name = f"User {chat.id}"
-                            
-                            contact_data = {
-                                "id": chat.id,
-                                "first_name": first_name,
-                                "last_name": last_name, 
-                                "username": username,
-                                "phone": getattr(chat, 'phone_number', '') or '',
-                                "display_name": display_name
-                            }
-                            
-                            contacts.append(contact_data)
-                            
-                            # Прерываем если нашли достаточно контактов
-                            if len(contacts) >= 20:
-                                break
-                        
-                    except Exception as dialog_error:
-                        print(f"Пропуск диалога: {dialog_error}")
-                        continue
+                try:
+                    async with asyncio.timeout(15.0):  # Общий тайм-аут на получение диалогов
+                        async for dialog in client.get_dialogs(limit=15):
+                            try:
+                                dialog_count += 1
+                                chat = dialog.chat
+                                
+                                # Проверяем только приватные чаты (не группы/каналы)
+                                if (hasattr(chat, 'type') and 
+                                    str(chat.type) == 'ChatType.PRIVATE' and
+                                    chat.id != me.id and chat.id != 777000 and
+                                    not getattr(chat, 'is_bot', False) and
+                                    not getattr(chat, 'is_deleted', False)):
+                                    
+                                    # Быстро формируем данные контакта
+                                    first_name = getattr(chat, 'first_name', '') or ''
+                                    last_name = getattr(chat, 'last_name', '') or ''
+                                    username = getattr(chat, 'username', '') or ''
+                                    
+                                    # Формируем имя для отображения
+                                    if first_name or last_name:
+                                        display_name = f"{first_name} {last_name}".strip()
+                                    elif username:
+                                        display_name = f"@{username}"
+                                    else:
+                                        display_name = f"User {chat.id}"
+                                    
+                                    contact_data = {
+                                        "id": chat.id,
+                                        "first_name": first_name,
+                                        "last_name": last_name, 
+                                        "username": username,
+                                        "phone": getattr(chat, 'phone_number', '') or '',
+                                        "display_name": display_name
+                                    }
+                                    
+                                    contacts.append(contact_data)
+                                    
+                                    # Прерываем если нашли достаточно контактов
+                                    if len(contacts) >= 10:
+                                        break
+                                
+                            except Exception as dialog_error:
+                                print(f"Пропуск диалога: {dialog_error}")
+                                continue
+                except asyncio.TimeoutError:
+                    print("Тайм-аут при получении диалогов")
 
                 print(f"✓ Найдено {len(contacts)} контактов из {dialog_count} диалогов")
                 
@@ -417,6 +465,9 @@ class TelegramManager:
                     "total_found": len(contacts)
                 }
                 
+            except asyncio.TimeoutError:
+                print("Тайм-аут при получении информации о пользователе")
+                return {"status": "error", "message": "Тайм-аут получения данных пользователя"}
             except Exception as get_error:
                 print(f"Ошибка получения диалогов: {get_error}")
                 return {"status": "error", "message": f"Ошибка получения диалогов: {str(get_error)}"}
@@ -426,52 +477,62 @@ class TelegramManager:
             return {"status": "error", "message": str(e)}
 
     async def get_user_chats(self, account_id: int) -> Dict:
-        """Быстрое получение чатов и каналов"""
+        """Быстрое получение чатов и каналов с тайм-аутом"""
         try:
             print(f"=== Быстрая загрузка чатов для аккаунта {account_id} ===")
             
-            client = await self.get_client(account_id)
+            # Получаем клиент с тайм-аутом
+            try:
+                client = await asyncio.wait_for(self.get_client(account_id), timeout=10.0)
+            except asyncio.TimeoutError:
+                return {"status": "error", "message": "Тайм-аут подключения к аккаунту"}
+            
             if not client:
                 return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
 
             chats = {"groups": [], "channels": [], "private": []}
             
             try:
-                # Быстро получаем только первые 25 диалогов
+                # Быстро получаем только первые 15 диалогов с тайм-аутом
                 dialog_count = 0
-                async for dialog in client.get_dialogs(limit=25):
-                    try:
-                        dialog_count += 1
-                        chat = dialog.chat
-                        
-                        if hasattr(chat, 'type'):
-                            chat_type = str(chat.type).replace('ChatType.', '')
-                            
-                            # Формируем название чата
-                            if hasattr(chat, 'title') and chat.title:
-                                title = chat.title
-                            else:
-                                first_name = getattr(chat, 'first_name', '') or ''
-                                last_name = getattr(chat, 'last_name', '') or ''
-                                title = f"{first_name} {last_name}".strip() or f"Chat {chat.id}"
-                            
-                            chat_info = {
-                                "id": chat.id,
-                                "title": title,
-                                "username": getattr(chat, 'username', '') or '',
-                                "type": chat_type
-                            }
-                            
-                            # Распределяем по типам
-                            if chat_type == 'PRIVATE':
-                                chats["private"].append(chat_info)
-                            elif chat_type in ['GROUP', 'SUPERGROUP']:
-                                chats["groups"].append(chat_info)
-                            elif chat_type == 'CHANNEL':
-                                chats["channels"].append(chat_info)
+                
+                try:
+                    async with asyncio.timeout(15.0):  # Общий тайм-аут на получение диалогов
+                        async for dialog in client.get_dialogs(limit=15):
+                            try:
+                                dialog_count += 1
+                                chat = dialog.chat
                                 
-                    except Exception as chat_error:
-                        continue
+                                if hasattr(chat, 'type'):
+                                    chat_type = str(chat.type).replace('ChatType.', '')
+                                    
+                                    # Формируем название чата
+                                    if hasattr(chat, 'title') and chat.title:
+                                        title = chat.title
+                                    else:
+                                        first_name = getattr(chat, 'first_name', '') or ''
+                                        last_name = getattr(chat, 'last_name', '') or ''
+                                        title = f"{first_name} {last_name}".strip() or f"Chat {chat.id}"
+                                    
+                                    chat_info = {
+                                        "id": chat.id,
+                                        "title": title,
+                                        "username": getattr(chat, 'username', '') or '',
+                                        "type": chat_type
+                                    }
+                                    
+                                    # Распределяем по типам
+                                    if chat_type == 'PRIVATE':
+                                        chats["private"].append(chat_info)
+                                    elif chat_type in ['GROUP', 'SUPERGROUP']:
+                                        chats["groups"].append(chat_info)
+                                    elif chat_type == 'CHANNEL':
+                                        chats["channels"].append(chat_info)
+                                        
+                            except Exception as chat_error:
+                                continue
+                except asyncio.TimeoutError:
+                    print("Тайм-аут при получении диалогов")
 
                 total_chats = len(chats['private']) + len(chats['groups']) + len(chats['channels'])
                 print(f"✓ Найдено чатов: {total_chats} (групп: {len(chats['groups'])}, каналов: {len(chats['channels'])})")

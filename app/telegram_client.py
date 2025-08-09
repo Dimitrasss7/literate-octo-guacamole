@@ -173,22 +173,57 @@ class TelegramManager:
         """Сохранение аккаунта в базу данных"""
         db = next(get_db())
         try:
-            # Читаем и шифруем файл сессии
-            with open(f"{session_path}.session", "rb") as f:
+            session_file_path = f"{session_path}.session"
+            
+            if not os.path.exists(session_file_path):
+                raise Exception(f"Session file not found: {session_file_path}")
+            
+            # Читаем файл сессии
+            with open(session_file_path, "rb") as f:
                 session_data = f.read()
             
-            encrypted_session = self.cipher.encrypt(session_data).decode()
+            print(f"Read session data, size: {len(session_data)} bytes")
             
-            account = Account(
-                phone=phone,
-                name=name,
-                session_data=encrypted_session,
-                proxy=proxy,
-                status="online"
-            )
+            # Пробуем зашифровать сессию
+            try:
+                encrypted_session = self.cipher.encrypt(session_data).decode()
+                print("Session encrypted successfully")
+            except Exception as encrypt_error:
+                print(f"Failed to encrypt session: {str(encrypt_error)}")
+                # Сохраняем как base64 если шифрование не работает
+                import base64
+                encrypted_session = base64.b64encode(session_data).decode()
+                print("Session saved as base64")
             
-            db.add(account)
+            # Проверяем, есть ли уже аккаунт с таким номером
+            existing_account = db.query(Account).filter(Account.phone == phone).first()
+            if existing_account:
+                # Обновляем существующий
+                existing_account.name = name
+                existing_account.session_data = encrypted_session
+                existing_account.proxy = proxy
+                existing_account.status = "online"
+                existing_account.is_active = True
+                print(f"Updated existing account: {phone}")
+            else:
+                # Создаем новый
+                account = Account(
+                    phone=phone,
+                    name=name,
+                    session_data=encrypted_session,
+                    proxy=proxy,
+                    status="online"
+                )
+                db.add(account)
+                print(f"Added new account: {phone}")
+            
             db.commit()
+            print("Account saved to database successfully")
+            
+        except Exception as save_error:
+            print(f"Error saving account: {str(save_error)}")
+            db.rollback()
+            raise save_error
         finally:
             db.close()
     
@@ -246,9 +281,21 @@ class TelegramManager:
             print(f"Creating client for account {account_id}")
             
             try:
-                # Расшифровываем сессию
-                session_data = self.cipher.decrypt(account.session_data.encode())
-                print(f"Session data decrypted successfully, size: {len(session_data)} bytes")
+                # Пробуем расшифровать сессию
+                try:
+                    session_data = self.cipher.decrypt(account.session_data.encode())
+                    print(f"Session data decrypted successfully, size: {len(session_data)} bytes")
+                except Exception as decrypt_error:
+                    print(f"Failed to decrypt session with current cipher: {str(decrypt_error)}")
+                    # Пробуем использовать данные как есть (если они не зашифрованы)
+                    try:
+                        import base64
+                        session_data = base64.b64decode(account.session_data.encode())
+                        print(f"Session data decoded from base64, size: {len(session_data)} bytes")
+                    except:
+                        # Если это текстовые данные, конвертируем в байты
+                        session_data = account.session_data.encode()
+                        print(f"Using session data as text bytes, size: {len(session_data)} bytes")
                 
                 # Создаем временный файл сессии
                 session_name = f"temp_session_{account_id}"
@@ -259,9 +306,27 @@ class TelegramManager:
                     
                 print(f"Session file created: {session_path}.session")
                 
-            except Exception as decrypt_error:
-                print(f"Failed to decrypt session: {str(decrypt_error)}")
-                raise Exception(f"Не удалось расшифровать сессию: {str(decrypt_error)}")
+            except Exception as session_error:
+                print(f"Failed to create session file: {str(session_error)}")
+                # Пробуем использовать оригинальные файлы сессий
+                original_session_file = None
+                phone_clean = account.phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')
+                
+                for file in os.listdir(SESSIONS_DIR):
+                    if file.startswith(f"session_{phone_clean}") and file.endswith('.session'):
+                        original_session_file = os.path.join(SESSIONS_DIR, file)
+                        break
+                
+                if original_session_file and os.path.exists(original_session_file):
+                    print(f"Using original session file: {original_session_file}")
+                    session_name = f"temp_session_{account_id}"
+                    session_path = os.path.join(SESSIONS_DIR, session_name)
+                    
+                    import shutil
+                    shutil.copy2(original_session_file, f"{session_path}.session")
+                    print(f"Copied original session to: {session_path}.session")
+                else:
+                    raise Exception(f"Не удалось создать файл сессии и не найден оригинальный файл")
             
             # Создаем клиент
             client = Client(

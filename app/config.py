@@ -1,4 +1,3 @@
-
 import os
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
@@ -48,3 +47,45 @@ LOGS_DIR = "logs"
 # Создаем необходимые папки
 for directory in [SESSIONS_DIR, UPLOADS_DIR, LOGS_DIR]:
     os.makedirs(directory, exist_ok=True)
+
+# Ключ шифрования для сессий
+if not ENCRYPTION_KEY:
+    print("ENCRYPTION_KEY not found, generating new key")
+    ENCRYPTION_KEY = Fernet.generate_key().decode()
+
+    # Сохраняем новый ключ в .env файл
+    env_file = os.path.join(os.path.dirname(__file__), '..', '.env')
+
+    try:
+        if os.path.exists(env_file):
+            with open(env_file, 'r') as f:
+                content = f.read()
+
+            if 'ENCRYPTION_KEY=' in content:
+                # Обновляем существующий ключ
+                lines = content.split('\n')
+                for i, line in enumerate(lines):
+                    if line.startswith('ENCRYPTION_KEY='):
+                        lines[i] = f'ENCRYPTION_KEY={ENCRYPTION_KEY}'
+                        break
+                content = '\n'.join(lines)
+            else:
+                # Добавляем новый ключ
+                content += f'\nENCRYPTION_KEY={ENCRYPTION_KEY}\n'
+
+            with open(env_file, 'w') as f:
+                f.write(content)
+        else:
+            # Создаем .env файл
+            with open(env_file, 'w') as f:
+                f.write(f'ENCRYPTION_KEY={ENCRYPTION_KEY}\n')
+
+        print(f"New encryption key saved to {env_file}")
+    except Exception as e:
+        print(f"Failed to save encryption key: {e}")
+
+elif len(ENCRYPTION_KEY.encode()) != 32:
+    print(f"Warning: ENCRYPTION_KEY length is {len(ENCRYPTION_KEY.encode())}, should be 32 bytes")
+    # Генерируем новый правильный ключ
+    ENCRYPTION_KEY = Fernet.generate_key().decode()
+    print("Generated new 32-byte encryption key")

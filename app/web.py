@@ -380,22 +380,23 @@ async def create_auto_campaign(request: Request, db: Session = Depends(get_db)):
     # Получаем контакты и чаты в зависимости от target_types
     target_contacts = []
     if 'private' in target_types:
-        contacts_result = await get_contacts(account_id)
+        contacts_result = await telegram_manager.get_user_contacts(account_id)
         if contacts_result.get("status") == "success":
             target_contacts.extend(contacts_result.get("contacts", []))
     if 'group' in target_types:
-        chats_result = await get_chats(account_id)
+        chats_result = await telegram_manager.get_user_chats(account_id)
         if chats_result.get("status") == "success":
-            target_contacts.extend(chats_result.get("chats", []))
+            chats = chats_result.get("chats", {})
+            target_contacts.extend(chats.get("groups", []))
     if 'channel' in target_types:
-        # Предполагаем, что для каналов тоже есть метод get_user_chats с соответствующими типами
-        chats_result = await get_chats(account_id)
+        chats_result = await telegram_manager.get_user_chats(account_id)
         if chats_result.get("status") == "success":
-            target_contacts.extend(chats_result.get("chats", []))
+            chats = chats_result.get("chats", {})
+            target_contacts.extend(chats.get("channels", []))
 
     # Удаляем дубликаты и форматируем для message_sender
     unique_targets = list({target.get('id') or target.get('username') or target.get('title') for target in target_contacts})
-    
+
     # Создаем кампанию и запускаем рассылку
     result = await message_sender.create_and_start_auto_campaign(account_id, message, delay_seconds, unique_targets)
     return JSONResponse(result)
@@ -421,18 +422,19 @@ async def start_auto_campaign(request: Request, db: Session = Depends(get_db)):
     # Получаем контакты и чаты в зависимости от target_types
     target_contacts = []
     if 'private' in target_types:
-        contacts_result = await get_contacts(account_id)
+        contacts_result = await telegram_manager.get_user_contacts(account_id)
         if contacts_result.get("status") == "success":
             target_contacts.extend(contacts_result.get("contacts", []))
     if 'group' in target_types:
-        chats_result = await get_chats(account_id)
+        chats_result = await telegram_manager.get_user_chats(account_id)
         if chats_result.get("status") == "success":
-            target_contacts.extend(chats_result.get("chats", []))
+            chats = chats_result.get("chats", {})
+            target_contacts.extend(chats.get("groups", []))
     if 'channel' in target_types:
-        # Предполагаем, что для каналов тоже есть метод get_user_chats с соответствующими типами
-        chats_result = await get_chats(account_id)
+        chats_result = await telegram_manager.get_user_chats(account_id)
         if chats_result.get("status") == "success":
-            target_contacts.extend(chats_result.get("chats", []))
+            chats = chats_result.get("chats", {})
+            target_contacts.extend(chats.get("channels", []))
 
     # Удаляем дубликаты и форматируем для message_sender
     unique_targets = list({target.get('id') or target.get('username') or target.get('title') for target in target_contacts})

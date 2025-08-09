@@ -431,17 +431,35 @@ class TelegramManager:
 
             contacts = []
             
-            # Получаем все диалоги пользователя
-            async for dialog in client.get_dialogs():
-                if dialog.chat.type in ["private"]:  # Только приватные чаты
+            try:
+                # Получаем контакты через метод get_contacts
+                async for contact in client.get_contacts():
                     contact_info = {
-                        "id": dialog.chat.id,
-                        "username": dialog.chat.username,
-                        "first_name": dialog.chat.first_name,
-                        "last_name": dialog.chat.last_name,
-                        "phone": getattr(dialog.chat, 'phone_number', None)
+                        "id": contact.id,
+                        "username": contact.username,
+                        "first_name": contact.first_name,
+                        "last_name": contact.last_name,
+                        "phone": getattr(contact, 'phone_number', None)
                     }
                     contacts.append(contact_info)
+                    
+                print(f"Found {len(contacts)} contacts for account {account_id}")
+                
+            except Exception as contacts_error:
+                print(f"Error getting contacts via get_contacts: {contacts_error}")
+                # Fallback: получаем приватные диалоги
+                async for dialog in client.get_dialogs():
+                    if dialog.chat.type in ["private"] and not dialog.chat.is_self:
+                        contact_info = {
+                            "id": dialog.chat.id,
+                            "username": dialog.chat.username,
+                            "first_name": dialog.chat.first_name,
+                            "last_name": dialog.chat.last_name,
+                            "phone": getattr(dialog.chat, 'phone_number', None)
+                        }
+                        contacts.append(contact_info)
+                        
+                print(f"Found {len(contacts)} private dialogs for account {account_id}")
 
             return {"status": "success", "contacts": contacts}
 

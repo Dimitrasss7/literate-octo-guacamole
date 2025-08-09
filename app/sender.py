@@ -155,6 +155,12 @@ class MessageSender:
                     db.commit()
                     return
                 
+                # Сбрасываем счетчики сообщений для нового запуска
+                account.messages_sent_today = 0
+                account.messages_sent_hour = 0
+                db.commit()
+                print(f"Reset message counters for account {account.id}")
+                
                 accounts = [account]
                 print(f"Using specific account {account.id} ({account.name}) for contacts campaign")
             else:
@@ -353,14 +359,20 @@ class MessageSender:
     def _check_account_limits(self, account: Account) -> bool:
         """Проверка лимитов аккаунта"""
         from app.config import MAX_MESSAGES_PER_HOUR, MAX_MESSAGES_PER_DAY
-
-        if account.messages_sent_today >= MAX_MESSAGES_PER_DAY:
-            return False
-
-        if account.messages_sent_hour >= MAX_MESSAGES_PER_HOUR:
-            return False
-
+        
+        # Временно отключаем лимиты для тестирования
         return True
+        
+        # Раскомментируйте строки ниже если нужно включить лимиты обратно
+        # if account.messages_sent_today >= MAX_MESSAGES_PER_DAY:
+        #     print(f"Account {account.id} reached daily limit: {account.messages_sent_today}/{MAX_MESSAGES_PER_DAY}")
+        #     return False
+
+        # if account.messages_sent_hour >= MAX_MESSAGES_PER_HOUR:
+        #     print(f"Account {account.id} reached hourly limit: {account.messages_sent_hour}/{MAX_MESSAGES_PER_HOUR}")
+        #     return False
+
+        # return True
 
     def _log_send_result(self, campaign_id: int, account_id: int, 
                         recipient: str, recipient_type: str, result: Dict):

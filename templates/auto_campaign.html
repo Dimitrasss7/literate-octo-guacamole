@@ -115,14 +115,38 @@ document.getElementById('account_id').addEventListener('change', function() {
 
 async function loadPreview(accountId) {
     try {
-        const response = await fetch(`/api/accounts/${accountId}/chats`);
-        const result = await response.json();
+        // Загружаем контакты и чаты параллельно
+        const [contactsResponse, chatsResponse] = await Promise.all([
+            fetch(`/api/accounts/${accountId}/contacts`),
+            fetch(`/api/accounts/${accountId}/chats`)
+        ]);
         
-        if (result.status === 'success') {
-            const chats = result.chats;
-            let html = '<div class="card-body">';
+        const contactsResult = await contactsResponse.json();
+        const chatsResult = await chatsResponse.json();
+        
+        let html = '<div class="card-body">';
+        
+        // Показываем приватные контакты
+        if (contactsResult.status === 'success' && contactsResult.contacts && contactsResult.contacts.length > 0) {
+            html += `<h6>Приватные контакты (${contactsResult.contacts.length})</h6>`;
+            html += '<ul class="list-unstyled">';
+            contactsResult.contacts.slice(0, 10).forEach(contact => {
+                const name = contact.first_name || contact.last_name ? 
+                    `${contact.first_name || ''} ${contact.last_name || ''}`.trim() : 
+                    'Без имени';
+                html += `<li>• ${name} ${contact.username ? '@' + contact.username : ''} ${contact.phone ? '(' + contact.phone + ')' : ''}</li>`;
+            });
+            if (contactsResult.contacts.length > 10) {
+                html += `<li>... и еще ${contactsResult.contacts.length - 10}</li>`;
+            }
+            html += '</ul>';
+        }
+        
+        // Показываем чаты если они есть
+        if (chatsResult.status === 'success' && chatsResult.chats) {
+            const chats = chatsResult.chats;
             
-            if (chats.private.length > 0) {
+            if (chats.private && chats.private.length > 0) {
                 html += `<h6>Приватные чаты (${chats.private.length})</h6>`;
                 html += '<ul class="list-unstyled">';
                 chats.private.slice(0, 10).forEach(chat => {
@@ -134,7 +158,7 @@ async function loadPreview(accountId) {
                 html += '</ul>';
             }
             
-            if (chats.groups.length > 0) {
+            if (chats.groups && chats.groups.length > 0) {
                 html += `<h6>Группы (${chats.groups.length})</h6>`;
                 html += '<ul class="list-unstyled">';
                 chats.groups.slice(0, 10).forEach(chat => {
@@ -146,7 +170,7 @@ async function loadPreview(accountId) {
                 html += '</ul>';
             }
             
-            if (chats.channels.length > 0) {
+            if (chats.channels && chats.channels.length > 0) {
                 html += `<h6>Каналы (${chats.channels.length})</h6>`;
                 html += '<ul class="list-unstyled">';
                 chats.channels.slice(0, 10).forEach(chat => {
@@ -157,13 +181,15 @@ async function loadPreview(accountId) {
                 }
                 html += '</ul>';
             }
-            
-            html += '</div>';
-            document.getElementById('previewArea').innerHTML = html;
-        } else {
-            document.getElementById('previewArea').innerHTML = 
-                `<div class="card-body"><p class="text-danger">Ошибка: ${result.message}</p></div>`;
         }
+        
+        if (html === '<div class="card-body">') {
+            html += '<p class="text-muted">Контакты и чаты не найдены или аккаунт недоступен</p>';
+        }
+        
+        html += '</div>';
+        document.getElementById('previewArea').innerHTML = html;
+        
     } catch (error) {
         console.error('Ошибка загрузки превью:', error);
         document.getElementById('previewArea').innerHTML = 

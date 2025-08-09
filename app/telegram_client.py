@@ -99,7 +99,7 @@ class TelegramManager:
                 await client.connect()
 
             # Подтверждаем код
-            await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
+            await client.sign_in(phone, code)
 
             # Получаем информацию о пользователе
             me = await client.get_me()
@@ -446,113 +446,96 @@ class TelegramManager:
     async def get_user_contacts(self, account_id: int) -> Dict:
         """Получение всех контактов пользователя"""
         try:
-            # Проверяем, есть ли уже активный клиент
-            if account_id in self.clients:
-                try:
-                    client = self.clients[account_id]
-                    # Проверяем, что клиент работает
-                    await client.get_me()
-                    print(f"Using existing client for account {account_id}")
-                except:
-                    # Клиент не работает, удаляем его
-                    del self.clients[account_id]
-                    client = None
-            else:
-                client = None
-
-            # Если нет активного клиента, создаем новый
+            client = await self.get_client(account_id)
             if not client:
-                client = await self.get_client(account_id)
-                if not client:
-                    return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
+                return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
 
             contacts = []
             
             try:
-                print(f"Attempting to get contacts for account {account_id}")
+                print(f"Getting all dialogs for account {account_id}")
                 
-                # Метод 1: Получаем контакты через get_contacts
-                try:
-                    contacts_result = await client.get_contacts()
-                    print(f"get_contacts returned: {type(contacts_result)}, length: {len(contacts_result) if hasattr(contacts_result, '__len__') else 'unknown'}")
-                    
-                    if hasattr(contacts_result, '__iter__'):
-                        for contact in contacts_result:
-                            try:
-                                contact_info = {
-                                    "id": contact.id,
-                                    "username": getattr(contact, 'username', None),
-                                    "first_name": getattr(contact, 'first_name', None),
-                                    "last_name": getattr(contact, 'last_name', None),
-                                    "phone": getattr(contact, 'phone_number', None)
-                                }
-                                contacts.append(contact_info)
-                            except Exception as contact_error:
-                                print(f"Error processing contact: {contact_error}")
-                                continue
+                # Получаем все диалоги и фильтруем приватные чаты (контакты)
+                dialog_count = 0
+                async for dialog in client.get_dialogs(limit=200):
+                    try:
+                        # Только приватные чаты (не боты, не сохраненные сообщения)
+                        if (dialog.chat.type == "private" and 
+                            not dialog.chat.is_self and 
+                            not dialog.chat.is_bot and
+                            not dialog.chat.is_deleted):
+                            
+                            contact_info = {
+                                "id": dialog.chat.id,
+                                "username": getattr(dialog.chat, 'username', None),
+                                "first_name": getattr(dialog.chat, 'first_name', None),
+                                "last_name": getattr(dialog.chat, 'last_name', None),
+                                "phone": getattr(dialog.chat, 'phone_number', None),
+                                "display_name": ""
+                            }
+                            
+                            # Формируем отображаемое имя
+                            if contact_info["first_name"]:
+                                contact_info["display_name"] = contact_info["first_name"]
+                                if contact_info["last_name"]:
+                                    contact_info["display_name"] += f" {contact_info['last_name']}"
+                            elif contact_info["username"]:
+                                contact_info["display_name"] = f"@{contact_info['username']}"
+                            else:
+                                contact_info["display_name"] = f"User {contact_info['id']}"
+                            
+                            contacts.append(contact_info)
+                            dialog_count += 1
+                            
+                    except Exception as dialog_error:
+                        print(f"Error processing dialog {dialog_count}: {dialog_error}")
+                        continue
                         
-                    print(f"Found {len(contacts)} contacts via get_contacts for account {account_id}")
-                    
-                except Exception as contacts_error:
-                    print(f"Error getting contacts via get_contacts: {contacts_error}")
+                print(f"Found {dialog_count} private contacts for account {account_id}")
                 
-                # Метод 2: Если контактов мало, пробуем получить приватные диалоги
-                if len(contacts) < 5:  # Если контактов меньше 5, добавляем из диалогов
-                    try:
-                        print(f"Getting private dialogs as contacts for account {account_id}")
-                        dialog_count = 0
-                        async for dialog in client.get_dialogs(limit=100):
-                            if dialog.chat.type == "private" and not dialog.chat.is_self and not dialog.chat.is_bot:
-                                try:
-                                    # Проверяем, не добавили ли уже этот контакт
-                                    already_added = any(c['id'] == dialog.chat.id for c in contacts)
-                                    if not already_added:
-                                        contact_info = {
-                                            "id": dialog.chat.id,
-                                            "username": getattr(dialog.chat, 'username', None),
-                                            "first_name": getattr(dialog.chat, 'first_name', None),
-                                            "last_name": getattr(dialog.chat, 'last_name', None),
-                                            "phone": getattr(dialog.chat, 'phone_number', None)
-                                        }
-                                        contacts.append(contact_info)
-                                        dialog_count += 1
-                                except Exception as dialog_error:
-                                    print(f"Error processing dialog: {dialog_error}")
-                                    continue
-                                    
-                        print(f"Added {dialog_count} private dialogs as contacts for account {account_id}")
-                    except Exception as dialogs_error:
-                        print(f"Error getting dialogs: {dialogs_error}")
-
-                # Метод 3: Если все еще мало контактов, пробуем iter_contacts
-                if len(contacts) == 0:
-                    try:
-                        print(f"Trying iter_contacts for account {account_id}")
-                        contact_count = 0
-                        async for contact in client.iter_contacts():
+                # Дополнительно пробуем получить контакты через API
+                try:
+                    contacts_api = await client.get_contacts()
+                    print(f"Additional contacts from API: {len(contacts_api) if contacts_api else 0}")
+                    
+                    if contacts_api:
+                        for contact in contacts_api:
                             try:
-                                contact_info = {
-                                    "id": contact.id,
-                                    "username": getattr(contact, 'username', None),
-                                    "first_name": getattr(contact, 'first_name', None),
-                                    "last_name": getattr(contact, 'last_name', None),
-                                    "phone": getattr(contact, 'phone_number', None)
-                                }
-                                contacts.append(contact_info)
-                                contact_count += 1
+                                # Проверяем, не добавили ли уже этот контакт
+                                already_added = any(c['id'] == contact.id for c in contacts)
+                                if not already_added:
+                                    contact_info = {
+                                        "id": contact.id,
+                                        "username": getattr(contact, 'username', None),
+                                        "first_name": getattr(contact, 'first_name', None),
+                                        "last_name": getattr(contact, 'last_name', None),
+                                        "phone": getattr(contact, 'phone_number', None),
+                                        "display_name": ""
+                                    }
+                                    
+                                    # Формируем отображаемое имя
+                                    if contact_info["first_name"]:
+                                        contact_info["display_name"] = contact_info["first_name"]
+                                        if contact_info["last_name"]:
+                                            contact_info["display_name"] += f" {contact_info['last_name']}"
+                                    elif contact_info["username"]:
+                                        contact_info["display_name"] = f"@{contact_info['username']}"
+                                    else:
+                                        contact_info["display_name"] = f"User {contact_info['id']}"
+                                    
+                                    contacts.append(contact_info)
                             except Exception as contact_error:
-                                print(f"Error processing contact via iter_contacts: {contact_error}")
+                                print(f"Error processing API contact: {contact_error}")
                                 continue
-                        print(f"Found {contact_count} contacts via iter_contacts for account {account_id}")
-                    except Exception as iter_error:
-                        print(f"Error getting contacts via iter_contacts: {iter_error}")
+                except Exception as api_error:
+                    print(f"Error getting contacts from API: {api_error}")
 
                 print(f"Total contacts found for account {account_id}: {len(contacts)}")
                 return {"status": "success", "contacts": contacts}
                 
             except Exception as method_error:
                 print(f"Error in contacts methods: {method_error}")
-                return {"status": "success", "contacts": []}
+                return {"status": "error", "message": f"Ошибка получения контактов: {str(method_error)}"}
 
         except Exception as e:
             print(f"Error getting contacts for account {account_id}: {str(e)}")

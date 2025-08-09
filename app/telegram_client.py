@@ -629,21 +629,43 @@ class TelegramManager:
                                     "USER_INVALID" in error_str or 
                                     "PEER_ID_INVALID" in error_str):
                                     
-                                    print(f"Попытка отправить только текст без файла для {recipient}")
-                                    # Пытаемся отправить только текст
-                                    if message:
+                                    print(f"Попытка отправить файл как фото для {recipient}")
+                                    # Пытаемся отправить как фото вместо документа
+                                    try:
+                                        sent_message = await client.send_photo(
+                                            chat_id=recipient,
+                                            photo=file_path,
+                                            caption=message if message else None,
+                                            schedule_date=schedule_date
+                                        )
+                                        print(f"✓ Файл успешно отправлен как фото для {recipient}")
+                                    except Exception as photo_error:
+                                        print(f"Не удалось отправить как фото, пытаемся как видео: {photo_error}")
                                         try:
-                                            sent_message = await client.send_message(
+                                            # Если не получилось как фото, пытаемся как видео
+                                            sent_message = await client.send_video(
                                                 chat_id=recipient,
-                                                text=f"{message}\n\n[Файл не удалось отправить из-за ограничений Telegram]",
+                                                video=file_path,
+                                                caption=message if message else None,
                                                 schedule_date=schedule_date
                                             )
-                                            print(f"✓ Отправлен только текст (файл пропущен) для {recipient}")
-                                        except Exception as text_error:
-                                            print(f"Не удалось отправить даже текст: {text_error}")
-                                            raise text_error
-                                    else:
-                                        raise file_error
+                                            print(f"✓ Файл успешно отправлен как видео для {recipient}")
+                                        except Exception as video_error:
+                                            print(f"Не удалось отправить как видео: {video_error}")
+                                            # Только в крайнем случае отправляем текст
+                                            if message:
+                                                try:
+                                                    sent_message = await client.send_message(
+                                                        chat_id=recipient,
+                                                        text=f"{message}\n\n[Файл не удалось отправить из-за ограничений Telegram]",
+                                                        schedule_date=schedule_date
+                                                    )
+                                                    print(f"✓ Отправлен только текст (файл пропущен) для {recipient}")
+                                                except Exception as text_error:
+                                                    print(f"Не удалось отправить даже текст: {text_error}")
+                                                    raise text_error
+                                            else:
+                                                raise video_error
                                 else:
                                     raise file_error
                         else:
@@ -665,20 +687,40 @@ class TelegramManager:
                                     "USER_INVALID" in error_str or 
                                     "PEER_ID_INVALID" in error_str):
                                     
-                                    print(f"Попытка отправить только текст без файла для {recipient}")
-                                    # Пытаемся отправить только текст
-                                    if message:
+                                    print(f"Попытка отправить файл как фото для {recipient}")
+                                    # Пытаемся отправить как фото вместо документа
+                                    try:
+                                        sent_message = await client.send_photo(
+                                            chat_id=recipient,
+                                            photo=file_path,
+                                            caption=message if message else None
+                                        )
+                                        print(f"✓ Файл успешно отправлен как фото для {recipient}")
+                                    except Exception as photo_error:
+                                        print(f"Не удалось отправить как фото, пытаемся как видео: {photo_error}")
                                         try:
-                                            sent_message = await client.send_message(
+                                            # Если не получилось как фото, пытаемся как видео
+                                            sent_message = await client.send_video(
                                                 chat_id=recipient,
-                                                text=f"{message}\n\n[Файл не удалось отправить из-за ограничений Telegram]"
+                                                video=file_path,
+                                                caption=message if message else None
                                             )
-                                            print(f"✓ Отправлен только текст (файл пропущен) для {recipient}")
-                                        except Exception as text_error:
-                                            print(f"Не удалось отправить даже текст: {text_error}")
-                                            raise text_error
-                                    else:
-                                        raise file_error
+                                            print(f"✓ Файл успешно отправлен как видео для {recipient}")
+                                        except Exception as video_error:
+                                            print(f"Не удалось отправить как видео: {video_error}")
+                                            # Только в крайнем случае отправляем текст
+                                            if message:
+                                                try:
+                                                    sent_message = await client.send_message(
+                                                        chat_id=recipient,
+                                                        text=f"{message}\n\n[Файл не удалось отправить из-за ограничений Telegram]"
+                                                    )
+                                                    print(f"✓ Отправлен только текст (файл пропущен) для {recipient}")
+                                                except Exception as text_error:
+                                                    print(f"Не удалось отправить даже текст: {text_error}")
+                                                    raise text_error
+                                            else:
+                                                raise video_error
                                 else:
                                     raise file_error
                     else:

@@ -359,7 +359,7 @@ class TelegramManager:
                 # Получаем контакты через Pyrogram
                 contacts_list = []
                 contacts = await client.get_contacts()
-                
+
                 for contact in contacts:
                     contact_data = {
                         "id": contact.id,
@@ -550,62 +550,91 @@ class TelegramManager:
             print(f"Error disconnecting client {account_id}: {e}")
         return False
 
-    async def send_message(self, account_id: int, chat_id: str, message: str, file_path: Optional[str] = None) -> Dict:
-        """Отправка сообщения"""
-        try:
-            print(f"Отправка сообщения в {chat_id} от аккаунта {account_id}")
+    async def send_message(self, account_id: int, recipient: str, message: str, file_path: Optional[str] = None) -> Dict:
+        """Отправка сообщения через указанный аккаунт"""
+        print(f"Отправка сообщения в {recipient} от аккаунта {account_id}")
 
+        try:
+            # Получаем клиент для аккаунта
             client = await self._get_client_for_account(account_id)
             if not client:
-                return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
+                return {"status": "error", "message": "Клиент не найден"}
 
-            # Проверяем лимиты
-            db = next(get_db())
+            # Получаем информацию о получателе
             try:
-                account = db.query(Account).filter(Account.id == account_id).first()
-                if not account:
-                    return {"status": "error", "message": "Аккаунт не найден"}
+                # Если это username, добавляем @ если его нет
+                if not recipient.startswith('@') and not recipient.startswith('+') and not recipient.isdigit() and not recipient.startswith('-'):
+                    recipient = f"@{recipient}"
 
-                now = datetime.utcnow()
-                if account.last_message_time and (now - account.last_message_time).seconds < 1:
-                    await asyncio.sleep(1)
-
-                # Подготавливаем target_chat
-                clean_chat_id = chat_id.strip()
-
-                if clean_chat_id.startswith('+'):
-                    target_chat = f"https://t.me/{clean_chat_id}"
-                elif clean_chat_id.startswith('@'):
-                    target_chat = clean_chat_id
-                elif clean_chat_id.isdigit() or clean_chat_id.startswith('-'):
-                    target_chat = int(clean_chat_id)
+                # Получаем пользователя/чат
+                if recipient.startswith('@'):
+                    # Username
+                    peer = await client.resolve_peer(recipient)
+                elif recipient.startswith('+'):
+                    # Invite link
+                    peer = await client.resolve_peer(recipient)
                 else:
-                    target_chat = f"@{clean_chat_id}"
+                    # ID чата
+                    peer = await client.resolve_peer(int(recipient))
 
                 # Отправляем сообщение
                 if file_path and os.path.exists(file_path):
-                    result = await client.send_document(target_chat, file_path, caption=message)
+                    # Отправляем с файлом
+                    sent_message = await client.send_document(
+                        chat_id=peer,
+                        document=file_path,
+                        caption=message
+                    )
                 else:
-                    result = await client.send_message(target_chat, message)
+                    # Отправляем только текст
+                    sent_message = await client.send_message(
+                        chat_id=peer,
+                        text=message
+                    )
 
-                # Обновляем статистику
+                # Обновляем статистику аккаунта
+                await self._update_account_stats(account_id)
+
+                return {
+                    "status": "success",
+                    "message_id": sent_message.id,
+                    "chat_id": sent_message.chat.id if hasattr(sent_message.chat, 'id') else None
+                }
+
+            except Exception as e:
+                error_msg = str(e)
+                print(f"Ошибка отправки сообщения: {error_msg}")
+                return {"status": "error", "message": error_msg}
+
+        except Exception as e:
+            error_msg = str(e)
+            print(f"Ошибка отправки сообщения: {error_msg}")
+            return {"status": "error", "message": error_msg}
+
+    async def _update_account_stats(self, account_id: int):
+        """Обновление статистики аккаунта"""
+        db = next(get_db())
+        try:
+            account = db.query(Account).filter(Account.id == account_id).first()
+            if account:
+                now = datetime.utcnow()
+                # Ограничение по времени между сообщениями
+                if account.last_message_time and (now - account.last_message_time).total_seconds() < 1:
+                    await asyncio.sleep(1 - (now - account.last_message_time).total_seconds())
+
                 account.messages_sent_today += 1
                 account.messages_sent_hour += 1
-                account.last_message_time = now
+                account.last_message_time = datetime.utcnow()
                 db.commit()
-
-                return {"status": "success", "message_id": result.id if hasattr(result, 'id') else None}
-
-            finally:
-                db.close()
-
-        except FloodWait as e:
-            print(f"FloodWait: {e.value} seconds")
-            await asyncio.sleep(e.value)
-            return {"status": "flood_wait", "seconds": e.value}
         except Exception as e:
-            print(f"Ошибка отправки сообщения: {str(e)}")
-            return {"status": "error", "message": str(e)}
+            db.rollback()
+            print(f"Ошибка обновления статистики аккаунта {account_id}: {e}")
+        finally:
+            db.close()
+
+    async def get_client(self, account_id: int) -> Optional[Client]:
+        """Вспомогательная функция для получения клиента (переименована для соответствия изменениям)"""
+        return await self._get_client_for_account(account_id)
 
 # Глобальный экземпляр менеджера
 telegram_manager = TelegramManager()

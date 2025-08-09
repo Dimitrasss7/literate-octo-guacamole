@@ -1,6 +1,10 @@
 
 import os
 from cryptography.fernet import Fernet
+from dotenv import load_dotenv
+
+# Загружаем переменные из .env файла
+load_dotenv()
 
 # Настройки приложения
 DATABASE_URL = "sqlite:///./telegram_sender.db"

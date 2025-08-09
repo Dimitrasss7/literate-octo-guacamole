@@ -138,12 +138,28 @@ class MessageSender:
             if not campaign:
                 return
 
-            # Получаем активные аккаунты
-            accounts = db.query(Account).filter(Account.is_active == True).all()
-            if not accounts:
-                campaign.status = "completed"
-                db.commit()
-                return
+            # Для кампаний по контактам используем только тот аккаунт, который был указан
+            if hasattr(campaign, 'account_id') and campaign.account_id:
+                # Используем конкретный аккаунт для рассылки по его контактам
+                account = db.query(Account).filter(
+                    Account.id == campaign.account_id,
+                    Account.is_active == True
+                ).first()
+                
+                if not account:
+                    campaign.status = "completed"
+                    db.commit()
+                    return
+                
+                accounts = [account]
+                print(f"Using specific account {account.id} ({account.name}) for contacts campaign")
+            else:
+                # Для обычных кампаний используем все активные аккаунты
+                accounts = db.query(Account).filter(Account.is_active == True).all()
+                if not accounts:
+                    campaign.status = "completed"
+                    db.commit()
+                    return
 
             # Парсим списки получателей
             recipients = self._parse_recipients(campaign)
@@ -163,9 +179,14 @@ class MessageSender:
                     if not self.active_campaigns.get(campaign_id, False):
                         break
 
-                    # Выбираем аккаунт по ротации
-                    account = accounts[account_index % len(accounts)]
-                    account_index += 1
+                    # Выбираем аккаунт
+                    if len(accounts) == 1:
+                        # Используем единственный аккаунт
+                        account = accounts[0]
+                    else:
+                        # Выбираем аккаунт по ротации
+                        account = accounts[account_index % len(accounts)]
+                        account_index += 1
 
                     # Проверяем лимиты аккаунта
                     if not self._check_account_limits(account):
@@ -201,8 +222,6 @@ class MessageSender:
                             print(f"Message sent successfully to {recipient}")
                     else:
                         print(f"Failed to send message to {recipient}: {result.get('message', 'Unknown error')}")
-
-                    # Убираем задержку, так как используем планировщик Telegram
 
             # Завершаем кампанию
             campaign.status = "completed"
@@ -433,6 +452,7 @@ class MessageSender:
                     private_message=message,
                     private_list="\n".join(targets),
                     attachment_path=attachment_path,
+                    account_id=account_id,
                     status="scheduled" if start_in_minutes else "created"
                 )
 

@@ -360,7 +360,7 @@ async def get_chats(account_id: int):
     return JSONResponse(result)
 
 @app.post("/api/auto-campaign")
-async def create_auto_campaign(request: Request):
+async def create_auto_campaign(request: Request, db: Session = Depends(get_db)):
     """Создание автоматической кампании"""
     data = await request.json()
 
@@ -373,8 +373,7 @@ async def create_auto_campaign(request: Request):
         return JSONResponse({"status": "error", "message": "Не указан аккаунт или сообщение"}), 400
 
     # Получаем активный аккаунт для рассылки
-    db_session = get_db()
-    account = db_session.query(Account).filter(Account.id == account_id).first()
+    account = db.query(Account).filter(Account.id == account_id).first()
     if not account or not account.is_active:
         return JSONResponse({"status": "error", "message": "Аккаунт неактивен или не найден"}), 400
 
@@ -402,9 +401,9 @@ async def create_auto_campaign(request: Request):
     return JSONResponse(result)
 
 @app.post("/api/auto-campaign/start")
-async def start_auto_campaign(request: Request):
+async def start_auto_campaign(request: Request, db: Session = Depends(get_db)):
     """Создание и запуск автоматической кампании"""
-    data = await request.get_json()
+    data = await request.json()
 
     account_id = data.get('account_id')
     message = data.get('message')
@@ -415,8 +414,7 @@ async def start_auto_campaign(request: Request):
         return JSONResponse({"status": "error", "message": "Не указан аккаунт или сообщение"}), 400
 
     # Получаем активный аккаунт для рассылки
-    db_session = get_db()
-    account = db_session.query(Account).filter(Account.id == account_id).first()
+    account = db.query(Account).filter(Account.id == account_id).first()
     if not account or not account.is_active:
         return JSONResponse({"status": "error", "message": "Аккаунт неактивен или не найден"}), 400
 

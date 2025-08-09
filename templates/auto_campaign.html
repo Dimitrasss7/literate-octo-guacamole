@@ -85,21 +85,29 @@ document.addEventListener('DOMContentLoaded', function() {
 async function loadAccounts() {
     try {
         const response = await fetch('/api/accounts');
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
         const accounts = await response.json();
         
         const select = document.getElementById('account_id');
         select.innerHTML = '<option value="">Выберите аккаунт</option>';
         
-        accounts.forEach(account => {
-            if (account.is_active) {
-                const option = document.createElement('option');
-                option.value = account.id;
-                option.textContent = `${account.name} (${account.phone})`;
-                select.appendChild(option);
-            }
-        });
+        if (Array.isArray(accounts)) {
+            accounts.forEach(account => {
+                if (account.is_active) {
+                    const option = document.createElement('option');
+                    option.value = account.id;
+                    option.textContent = `${account.name} (${account.phone})`;
+                    select.appendChild(option);
+                }
+            });
+        } else {
+            console.error('Неожиданный формат ответа:', accounts);
+        }
     } catch (error) {
         console.error('Ошибка загрузки аккаунтов:', error);
+        alert('Ошибка загрузки списка аккаунтов. Проверьте консоль для деталей.');
     }
 }
 
@@ -115,14 +123,24 @@ document.getElementById('account_id').addEventListener('change', function() {
 
 async function loadPreview(accountId) {
     try {
+        console.log('Загружаем данные для аккаунта:', accountId);
+        
         // Загружаем контакты и чаты параллельно
         const [contactsResponse, chatsResponse] = await Promise.all([
             fetch(`/api/accounts/${accountId}/contacts`),
             fetch(`/api/accounts/${accountId}/chats`)
         ]);
         
+        console.log('Ответы получены. Статусы:', {
+            contacts: contactsResponse.status,
+            chats: chatsResponse.status
+        });
+        
         const contactsResult = await contactsResponse.json();
         const chatsResult = await chatsResponse.json();
+        
+        console.log('Данные контактов:', contactsResult);
+        console.log('Данные чатов:', chatsResult);
         
         let html = '<div class="card-body">';
         

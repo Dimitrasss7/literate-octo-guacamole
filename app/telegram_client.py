@@ -607,7 +607,7 @@ class TelegramManager:
             if not os.path.exists(file_path):
                 return {"status": "error", "message": "Файл не найден"}
 
-            client = await self.get_simple_client(account_id)
+            client = await self._get_client_for_account(account_id)
             if not client:
                 return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
 
@@ -622,6 +622,10 @@ class TelegramManager:
                 schedule_date = datetime.now() + timedelta(seconds=schedule_seconds)
 
             try:
+                # Проверяем, что клиент подключен
+                if not client.is_connected:
+                    await client.connect()
+
                 # Отправляем как документ с форсированием (для APK и других файлов)
                 sent_msg = await client.send_document(
                     chat_id=chat_id,
@@ -651,7 +655,7 @@ class TelegramManager:
                           attachment_path: Optional[str] = None, schedule_seconds: int = 0) -> Dict:
         """Отправка сообщения с возможностью прикрепления файла"""
         try:
-            client = await self.get_simple_client(account_id)
+            client = await self._get_client_for_account(account_id)
             if not client:
                 return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
 
@@ -665,6 +669,10 @@ class TelegramManager:
                     # Используем улучшенный метод отправки файлов
                     return await self.send_file(account_id, chat_id, attachment_path, message, schedule_seconds)
                 else:
+                    # Проверяем, что клиент подключен
+                    if not client.is_connected:
+                        await client.connect()
+
                     # Отправляем только текст
                     if schedule_seconds > 0:
                         # Планируем отправку текста

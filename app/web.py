@@ -231,6 +231,11 @@ async def settings_page(request: Request):
     """Страница настроек антиспам-системы"""
     return templates.TemplateResponse("settings.html", {"request": request})
 
+@app.get("/contacts-campaign")
+async def contacts_campaign_page(request: Request):
+    """Страница рассылки по контактам"""
+    return templates.TemplateResponse("contacts_campaign.html", {"request": request})
+
 # API endpoints
 
 @app.get("/proxies", response_class=HTMLResponse)
@@ -376,6 +381,89 @@ async def get_stats(db: Session = Depends(get_db)):
             "used": proxy_manager.get_used_proxies_count()
         }
     })
+
+@app.post("/api/contacts-campaign")
+async def create_contacts_campaign(request: Request, db: Session = Depends(get_db)):
+    """Создание кампании рассылки по контактам"""
+    try:
+        data = await request.json()
+        
+        account_id = data.get('account_id')
+        message = data.get('message')
+        delay_seconds = data.get('delay_seconds', 5)
+        start_in_minutes = data.get('start_in_minutes')
+
+        if not account_id or not message:
+            return JSONResponse({"status": "error", "message": "Не указан аккаунт или сообщение"})
+
+        # Проверяем активность аккаунта
+        account = db.query(Account).filter(Account.id == account_id).first()
+        if not account or not account.is_active:
+            return JSONResponse({"status": "error", "message": "Аккаунт неактивен или не найден"})
+
+        result = await message_sender.create_contacts_campaign(
+            account_id, message, delay_seconds, start_in_minutes
+        )
+        
+        return JSONResponse(result)
+        
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)})
+
+@app.post("/api/contacts-campaign/start")
+async def start_contacts_campaign(request: Request, db: Session = Depends(get_db)):
+    """Создание и запуск кампании рассылки по контактам"""
+    try:
+        data = await request.json()
+        
+        account_id = data.get('account_id')
+        message = data.get('message')
+        delay_seconds = data.get('delay_seconds', 5)
+        start_in_minutes = data.get('start_in_minutes')
+
+        if not account_id or not message:
+            return JSONResponse({"status": "error", "message": "Не указан аккаунт или сообщение"})
+
+        # Проверяем активность аккаунта
+        account = db.query(Account).filter(Account.id == account_id).first()
+        if not account or not account.is_active:
+            return JSONResponse({"status": "error", "message": "Аккаунт неактивен или не найден"})
+
+        result = await message_sender.start_contacts_campaign(
+            account_id, message, delay_seconds, start_in_minutes
+        )
+        
+        return JSONResponse(result)
+        
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)})
+
+@app.post("/api/campaigns/{campaign_id}/cancel")
+async def cancel_scheduled_campaign(campaign_id: int):
+    """Отмена запланированной кампании"""
+    result = await message_sender.cancel_scheduled_campaign(campaign_id)
+    return JSONResponse(result)
+
+@app.get("/api/scheduled-campaigns")
+async def get_scheduled_campaigns():
+    """Получение списка запланированных кампаний"""
+    scheduled = message_sender.get_scheduled_campaigns()
+    return JSONResponse({"scheduled_campaigns": scheduled})
+
+@app.get("/api/dialogs/{account_id}")
+async def get_dialogs(account_id: int, db: Session = Depends(get_db)):
+    """API для получения диалогов аккаунта (старый метод)"""
+    try:
+        print(f"API запрос диалогов для аккаунта {account_id}")
+        result = await telegram_manager.get_user_dialogs(account_id)
+        print(f"Результат получения диалогов: {result}")
+        return JSONResponse(result)
+    except Exception as e:
+        print(f"Error in get_dialogs API: {str(e)}")
+        return JSONResponse(
+            {"status": "error", "message": f"Ошибка получения диалогов: {str(e)}"},
+            status_code=500
+        )
 
 
 

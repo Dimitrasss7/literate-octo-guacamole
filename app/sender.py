@@ -1,7 +1,7 @@
 import asyncio
 import json
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from sqlalchemy.orm import Session
 from app.database import Account, Campaign, SendLog, get_db
@@ -10,6 +10,7 @@ from app.telegram_client import telegram_manager
 class MessageSender:
     def __init__(self):
         self.active_campaigns: Dict[int, bool] = {}
+        self.scheduled_campaigns: Dict[int, asyncio.Task] = {}
 
     async def start_campaign(self, campaign_id: int) -> Dict:
         """Запуск кампании рассылки"""
@@ -389,6 +390,150 @@ class MessageSender:
             return {"status": "success", "campaign_id": campaign.id}
         finally:
             db.close()
+
+    async def create_contacts_campaign(self, account_id: int, message: str, delay_seconds: int = 5, 
+                                     start_in_minutes: Optional[int] = None) -> Dict:
+        """Создание кампании рассылки только по контактам из адресной книги"""
+        try:
+            # Получаем контакты пользователя из адресной книги
+            contacts_result = await telegram_manager.get_user_contacts(account_id)
+            if contacts_result["status"] != "success":
+                return {"status": "error", "message": f"Не удалось получить контакты: {contacts_result.get('message', 'Unknown error')}"}
+
+            contacts = contacts_result.get("contacts", [])
+            if not contacts:
+                return {"status": "error", "message": "У аккаунта нет контактов для рассылки"}
+
+            # Формируем список получателей
+            targets = []
+            for contact in contacts:
+                if contact.get("username"):
+                    targets.append(f"@{contact['username']}")
+                elif contact.get("id"):
+                    targets.append(str(contact["id"]))
+
+            if not targets:
+                return {"status": "error", "message": "Не найдено целей для рассылки среди контактов"}
+
+            # Создаем кампанию в базе данных
+            db = next(get_db())
+            try:
+                # Вычисляем время запуска
+                start_time = datetime.utcnow()
+                if start_in_minutes:
+                    start_time = start_time + timedelta(minutes=start_in_minutes)
+
+                campaign = Campaign(
+                    name=f"Рассылка по контактам {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                    description=f"Рассылка сообщения по {len(targets)} контактам из адресной книги",
+                    delay_seconds=delay_seconds,
+                    private_message=message,
+                    private_list="\n".join(targets),
+                    status="scheduled" if start_in_minutes else "created"
+                )
+
+                db.add(campaign)
+                db.commit()
+                db.refresh(campaign)
+
+                # Если задана задержка - планируем запуск
+                if start_in_minutes:
+                    task = asyncio.create_task(self._schedule_campaign_start(campaign.id, start_in_minutes * 60))
+                    self.scheduled_campaigns[campaign.id] = task
+                    
+                    return {
+                        "status": "success",
+                        "campaign_id": campaign.id,
+                        "contacts_count": len(targets),
+                        "scheduled_start": start_time.strftime('%Y-%m-%d %H:%M:%S'),
+                        "message": f"Кампания создана и запланирована на {start_time.strftime('%H:%M')}. Рассылка по {len(targets)} контактам"
+                    }
+                else:
+                    return {
+                        "status": "success",
+                        "campaign_id": campaign.id,
+                        "contacts_count": len(targets),
+                        "message": f"Кампания создана с {len(targets)} контактами. Готова к запуску"
+                    }
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            print(f"Error creating contacts campaign: {str(e)}")
+            return {"status": "error", "message": str(e)}
+
+    async def start_contacts_campaign(self, account_id: int, message: str, delay_seconds: int = 5, 
+                                    start_in_minutes: Optional[int] = None) -> Dict:
+        """Создание и запуск кампании рассылки по контактам"""
+        # Создаем кампанию
+        result = await self.create_contacts_campaign(account_id, message, delay_seconds, start_in_minutes)
+        if result["status"] != "success":
+            return result
+
+        campaign_id = result["campaign_id"]
+
+        # Если задержка не указана - запускаем сразу
+        if start_in_minutes is None:
+            start_result = await self.start_campaign(campaign_id)
+            if start_result["status"] == "success":
+                return {
+                    "status": "success",
+                    "campaign_id": campaign_id,
+                    "contacts_count": result["contacts_count"],
+                    "message": f"Рассылка запущена по {result['contacts_count']} контактам"
+                }
+            else:
+                return start_result
+        else:
+            return result
+
+    async def _schedule_campaign_start(self, campaign_id: int, delay_seconds: int):
+        """Планировщик запуска кампании с задержкой"""
+        try:
+            print(f"Кампания {campaign_id} запланирована на запуск через {delay_seconds} секунд")
+            
+            # Ждем указанное время
+            await asyncio.sleep(delay_seconds)
+            
+            # Запускаем кампанию
+            result = await self.start_campaign(campaign_id)
+            
+            # Удаляем из планировщика
+            if campaign_id in self.scheduled_campaigns:
+                del self.scheduled_campaigns[campaign_id]
+            
+            print(f"Запланированная кампания {campaign_id} запущена: {result}")
+            
+        except asyncio.CancelledError:
+            print(f"Запланированная кампания {campaign_id} была отменена")
+        except Exception as e:
+            print(f"Ошибка запуска запланированной кампании {campaign_id}: {str(e)}")
+
+    async def cancel_scheduled_campaign(self, campaign_id: int) -> Dict:
+        """Отмена запланированной кампании"""
+        if campaign_id in self.scheduled_campaigns:
+            task = self.scheduled_campaigns[campaign_id]
+            task.cancel()
+            del self.scheduled_campaigns[campaign_id]
+            
+            # Обновляем статус в БД
+            db = next(get_db())
+            try:
+                campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+                if campaign:
+                    campaign.status = "cancelled"
+                    db.commit()
+            finally:
+                db.close()
+            
+            return {"status": "success", "message": "Запланированная кампания отменена"}
+        
+        return {"status": "error", "message": "Кампания не найдена в планировщике"}
+
+    def get_scheduled_campaigns(self) -> List[int]:
+        """Получение списка запланированных кампаний"""
+        return list(self.scheduled_campaigns.keys())
 
 
 # Глобальный экземпляр отправителя

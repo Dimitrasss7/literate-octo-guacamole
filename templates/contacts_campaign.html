@@ -1,0 +1,300 @@
+
+{% extends "base.html" %}
+
+{% block title %}Рассылка по контактам - Telegram Mass Sender{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+    <h1 class="h2">Рассылка по контактам</h1>
+</div>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-address-book"></i> Создать рассылку по контактам</h5>
+            </div>
+            <div class="card-body">
+                <form id="contactsCampaignForm">
+                    <div class="mb-3">
+                        <label for="accountSelect" class="form-label">Выберите аккаунт</label>
+                        <select class="form-select" id="accountSelect" required>
+                            <option value="">Загрузка аккаунтов...</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="message" class="form-label">Сообщение для рассылки</label>
+                        <textarea class="form-control" id="message" rows="4" required 
+                                  placeholder="Введите текст сообщения для отправки всем контактам"></textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="delaySeconds" class="form-label">Задержка между сообщениями (секунды)</label>
+                        <input type="number" class="form-control" id="delaySeconds" value="5" min="1" max="60">
+                        <small class="form-text text-muted">Рекомендуется 3-10 секунд для избежания блокировок</small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="startInMinutes" class="form-label">Запуск через (минут)</label>
+                        <input type="number" class="form-control" id="startInMinutes" placeholder="Сразу" min="1" max="1440">
+                        <small class="form-text text-muted">Оставьте пустым для немедленного запуска. Максимум 24 часа (1440 минут)</small>
+                    </div>
+
+                    <div class="d-grid gap-2">
+                        <button type="submit" class="btn btn-primary" id="startButton">
+                            <i class="fas fa-paper-plane"></i> Создать и запустить рассылку
+                        </button>
+                        <button type="button" class="btn btn-info" id="previewButton">
+                            <i class="fas fa-eye"></i> Предварительный просмотр контактов
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-users"></i> Контакты для рассылки</h5>
+            </div>
+            <div class="card-body">
+                <div id="contactsPreview">
+                    <p class="text-muted">Выберите аккаунт и нажмите "Предварительный просмотр", чтобы увидеть список контактов</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5><i class="fas fa-clock"></i> Запланированные рассылки</h5>
+            </div>
+            <div class="card-body">
+                <div id="scheduledCampaigns">
+                    <p class="text-muted">Нет запланированных рассылок</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно результата -->
+<div class="modal fade" id="resultModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Результат</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="resultMessage">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const accountSelect = document.getElementById('accountSelect');
+    const contactsCampaignForm = document.getElementById('contactsCampaignForm');
+    const previewButton = document.getElementById('previewButton');
+    const contactsPreview = document.getElementById('contactsPreview');
+    const scheduledCampaigns = document.getElementById('scheduledCampaigns');
+
+    // Загружаем список аккаунтов
+    async function loadAccounts() {
+        try {
+            const response = await fetch('/api/accounts');
+            const accounts = await response.json();
+            
+            accountSelect.innerHTML = '<option value="">Выберите аккаунт</option>';
+            accounts.forEach(account => {
+                if (account.is_active) {
+                    const option = document.createElement('option');
+                    option.value = account.id;
+                    option.textContent = `${account.name} (${account.phone})`;
+                    accountSelect.appendChild(option);
+                }
+            });
+        } catch (error) {
+            console.error('Ошибка загрузки аккаунтов:', error);
+            accountSelect.innerHTML = '<option value="">Ошибка загрузки аккаунтов</option>';
+        }
+    }
+
+    // Загружаем запланированные кампании
+    async function loadScheduledCampaigns() {
+        try {
+            const response = await fetch('/api/scheduled-campaigns');
+            const data = await response.json();
+            
+            if (data.scheduled_campaigns && data.scheduled_campaigns.length > 0) {
+                scheduledCampaigns.innerHTML = data.scheduled_campaigns.map(id => 
+                    `<div class="d-flex justify-content-between align-items-center mb-2">
+                        <span>Кампания #${id}</span>
+                        <button class="btn btn-sm btn-danger" onclick="cancelCampaign(${id})">Отменить</button>
+                    </div>`
+                ).join('');
+            } else {
+                scheduledCampaigns.innerHTML = '<p class="text-muted">Нет запланированных рассылок</p>';
+            }
+        } catch (error) {
+            console.error('Ошибка загрузки запланированных кампаний:', error);
+        }
+    }
+
+    // Предварительный просмотр контактов
+    previewButton.addEventListener('click', async function() {
+        const accountId = accountSelect.value;
+        if (!accountId) {
+            alert('Выберите аккаунт');
+            return;
+        }
+
+        contactsPreview.innerHTML = '<div class="text-center"><div class="spinner-border" role="status"></div><p>Загрузка контактов...</p></div>';
+
+        try {
+            const response = await fetch(`/api/contacts/${accountId}`);
+            const result = await response.json();
+
+            if (result.status === 'success') {
+                const contacts = result.contacts || [];
+                if (contacts.length > 0) {
+                    contactsPreview.innerHTML = `
+                        <h6>Найдено ${contacts.length} контактов:</h6>
+                        <div class="contacts-list" style="max-height: 300px; overflow-y: auto;">
+                            ${contacts.map(contact => 
+                                `<div class="contact-item mb-2 p-2 border rounded">
+                                    <strong>${contact.display_name}</strong>
+                                    ${contact.phone ? `<br><small>📞 ${contact.phone}</small>` : ''}
+                                    ${contact.username ? `<br><small>@${contact.username}</small>` : ''}
+                                </div>`
+                            ).join('')}
+                        </div>
+                    `;
+                } else {
+                    contactsPreview.innerHTML = '<p class="text-warning">В адресной книге аккаунта нет контактов</p>';
+                }
+            } else {
+                contactsPreview.innerHTML = `<p class="text-danger">Ошибка: ${result.message}</p>`;
+            }
+        } catch (error) {
+            console.error('Ошибка загрузки контактов:', error);
+            contactsPreview.innerHTML = '<p class="text-danger">Ошибка загрузки контактов</p>';
+        }
+    });
+
+    // Отправка формы
+    contactsCampaignForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+
+        const accountId = accountSelect.value;
+        const message = document.getElementById('message').value;
+        const delaySeconds = parseInt(document.getElementById('delaySeconds').value);
+        const startInMinutes = document.getElementById('startInMinutes').value;
+
+        if (!accountId || !message) {
+            alert('Заполните все обязательные поля');
+            return;
+        }
+
+        const startButton = document.getElementById('startButton');
+        startButton.disabled = true;
+        startButton.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div> Создание...';
+
+        try {
+            const requestData = {
+                account_id: parseInt(accountId),
+                message: message,
+                delay_seconds: delaySeconds,
+                start_in_minutes: startInMinutes ? parseInt(startInMinutes) : null
+            };
+
+            const response = await fetch('/api/contacts-campaign/start', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestData)
+            });
+
+            const result = await response.json();
+            
+            // Показываем результат в модальном окне
+            const resultMessage = document.getElementById('resultMessage');
+            if (result.status === 'success') {
+                resultMessage.innerHTML = `
+                    <div class="alert alert-success">
+                        <h6>Кампания создана успешно!</h6>
+                        <p>${result.message}</p>
+                        ${result.scheduled_start ? `<p><strong>Время запуска:</strong> ${result.scheduled_start}</p>` : ''}
+                    </div>
+                `;
+                // Очищаем форму
+                contactsCampaignForm.reset();
+                contactsPreview.innerHTML = '<p class="text-muted">Выберите аккаунт и нажмите "Предварительный просмотр", чтобы увидеть список контактов</p>';
+                // Обновляем запланированные кампании
+                loadScheduledCampaigns();
+            } else {
+                resultMessage.innerHTML = `
+                    <div class="alert alert-danger">
+                        <h6>Ошибка создания кампании</h6>
+                        <p>${result.message}</p>
+                    </div>
+                `;
+            }
+
+            new bootstrap.Modal(document.getElementById('resultModal')).show();
+
+        } catch (error) {
+            console.error('Ошибка отправки:', error);
+            document.getElementById('resultMessage').innerHTML = `
+                <div class="alert alert-danger">
+                    <h6>Ошибка сети</h6>
+                    <p>Не удалось отправить запрос: ${error.message}</p>
+                </div>
+            `;
+            new bootstrap.Modal(document.getElementById('resultModal')).show();
+        } finally {
+            startButton.disabled = false;
+            startButton.innerHTML = '<i class="fas fa-paper-plane"></i> Создать и запустить рассылку';
+        }
+    });
+
+    // Отмена запланированной кампании
+    window.cancelCampaign = async function(campaignId) {
+        if (!confirm('Вы уверены, что хотите отменить эту кампанию?')) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/campaigns/${campaignId}/cancel`, {
+                method: 'POST'
+            });
+
+            const result = await response.json();
+            
+            if (result.status === 'success') {
+                alert('Кампания отменена');
+                loadScheduledCampaigns();
+            } else {
+                alert('Ошибка отмены: ' + result.message);
+            }
+        } catch (error) {
+            console.error('Ошибка отмены кампании:', error);
+            alert('Ошибка отмены кампании');
+        }
+    };
+
+    // Загружаем данные при старте
+    loadAccounts();
+    loadScheduledCampaigns();
+    
+    // Обновляем запланированные кампании каждые 30 секунд
+    setInterval(loadScheduledCampaigns, 30000);
+});
+</script>
+{% endblock %}

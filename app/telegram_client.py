@@ -340,9 +340,68 @@ class TelegramManager:
             return None
 
     async def get_user_contacts(self, account_id: int) -> Dict:
-        """Получение контактов из диалогов"""
+        """Получение контактов из адресной книги пользователя"""
         try:
-            print(f"=== Получение контактов для аккаунта {account_id} ===")
+            print(f"=== Получение контактов из адресной книги для аккаунта {account_id} ===")
+
+            client = await self.get_simple_client(account_id)
+            if not client:
+                return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
+
+            contacts = []
+
+            try:
+                # Получаем контакты из адресной книги
+                async for contact in client.get_contacts():
+                    # Получаем данные контакта
+                    first_name = getattr(contact, 'first_name', '') or ''
+                    last_name = getattr(contact, 'last_name', '') or ''
+                    username = getattr(contact, 'username', '') or ''
+                    phone = getattr(contact, 'phone', '') or ''
+
+                    # Формируем имя для отображения
+                    display_name = f"{first_name} {last_name}".strip()
+                    if not display_name and username:
+                        display_name = f"@{username}"
+                    elif not display_name:
+                        display_name = f"Пользователь {contact.id}"
+
+                    contact_info = {
+                        "id": contact.id,
+                        "first_name": first_name,
+                        "last_name": last_name,
+                        "username": username,
+                        "phone": phone,
+                        "display_name": display_name
+                    }
+
+                    contacts.append(contact_info)
+                    print(f"✓ Контакт: {display_name} ({phone})")
+
+                print(f"✓ Найдено {len(contacts)} контактов в адресной книге")
+
+                # Закрываем клиент
+                await client.disconnect()
+
+                return {
+                    "status": "success",
+                    "contacts": contacts,
+                    "total": len(contacts)
+                }
+
+            except Exception as e:
+                print(f"Ошибка получения контактов: {str(e)}")
+                await client.disconnect()
+                return {"status": "error", "message": f"Ошибка получения контактов: {str(e)}"}
+
+        except Exception as e:
+            print(f"Общая ошибка получения контактов: {str(e)}")
+            return {"status": "error", "message": str(e)}
+
+    async def get_user_dialogs(self, account_id: int) -> Dict:
+        """Получение контактов из диалогов (старый метод)"""
+        try:
+            print(f"=== Получение диалогов для аккаунта {account_id} ===")
 
             client = await self.get_simple_client(account_id)
             if not client:

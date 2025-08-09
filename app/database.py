@@ -1,4 +1,3 @@
-
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Text, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -11,7 +10,7 @@ Base = declarative_base()
 
 class Account(Base):
     __tablename__ = "accounts"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     phone = Column(String, unique=True, index=True)
     name = Column(String)
@@ -27,32 +26,26 @@ class Account(Base):
 
 class Campaign(Base):
     __tablename__ = "campaigns"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String)
-    status = Column(String, default="draft")  # draft, running, paused, completed
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Настройки сообщений
-    channel_message = Column(Text)
-    group_message = Column(Text)
-    private_message = Column(Text)
-    
-    # Настройки отправки
+    description = Column(Text, nullable=True)
+    channel_message = Column(Text, nullable=True)
+    group_message = Column(Text, nullable=True)
+    private_message = Column(Text, nullable=True)
+    channels_list = Column(Text, nullable=True)
+    groups_list = Column(Text, nullable=True)
+    private_list = Column(Text, nullable=True)
     delay_seconds = Column(Integer, default=3)
-    start_time = Column(DateTime, nullable=True)
-    
-    # Списки получателей
-    channels_list = Column(Text)  # JSON список каналов
-    groups_list = Column(Text)    # JSON список групп
-    private_list = Column(Text)   # JSON список приватных чатов
-    
-    # Файлы
     attachment_path = Column(String, nullable=True)
+    status = Column(String, default="created")  # created, running, paused, completed, scheduled, cancelled
+    created_at = Column(DateTime, default=datetime.utcnow)
+    scheduled_start = Column(DateTime, nullable=True)  # время запланированного старта
+    account_id = Column(Integer, nullable=True)  # для привязки к конкретному аккаунту
 
 class SendLog(Base):
     __tablename__ = "send_logs"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     campaign_id = Column(Integer)
     account_id = Column(Integer)

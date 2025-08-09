@@ -411,16 +411,16 @@ async def create_contacts_campaign(request: Request, db: Session = Depends(get_d
         return JSONResponse({"status": "error", "message": str(e)})
 
 @app.post("/api/contacts-campaign/start")
-async def start_contacts_campaign(request: Request, db: Session = Depends(get_db)):
+async def start_contacts_campaign(
+    account_id: int = Form(...),
+    message: str = Form(...),
+    delay_seconds: int = Form(5),
+    start_in_minutes: Optional[int] = Form(None),
+    attachment: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db)
+):
     """Создание и запуск кампании рассылки по контактам"""
     try:
-        data = await request.json()
-        
-        account_id = data.get('account_id')
-        message = data.get('message')
-        delay_seconds = data.get('delay_seconds', 5)
-        start_in_minutes = data.get('start_in_minutes')
-
         if not account_id or not message:
             return JSONResponse({"status": "error", "message": "Не указан аккаунт или сообщение"})
 
@@ -429,8 +429,23 @@ async def start_contacts_campaign(request: Request, db: Session = Depends(get_db
         if not account or not account.is_active:
             return JSONResponse({"status": "error", "message": "Аккаунт неактивен или не найден"})
 
+        # Обрабатываем файл если есть
+        attachment_path = None
+        if attachment and attachment.filename:
+            # Создаем безопасное имя файла
+            import uuid
+            file_extension = os.path.splitext(attachment.filename)[1]
+            safe_filename = f"{uuid.uuid4()}{file_extension}"
+            file_path = os.path.join(UPLOADS_DIR, safe_filename)
+            
+            # Сохраняем файл
+            with open(file_path, "wb") as f:
+                content = await attachment.read()
+                f.write(content)
+            attachment_path = file_path
+
         result = await message_sender.start_contacts_campaign(
-            account_id, message, delay_seconds, start_in_minutes
+            account_id, message, delay_seconds, start_in_minutes, attachment_path
         )
         
         return JSONResponse(result)

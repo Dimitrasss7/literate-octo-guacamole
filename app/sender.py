@@ -390,7 +390,7 @@ class MessageSender:
             db.close()
 
     async def create_contacts_campaign(self, account_id: int, message: str, delay_seconds: int = 5, 
-                                     start_in_minutes: Optional[int] = None) -> Dict:
+                                     start_in_minutes: Optional[int] = None, attachment_path: Optional[str] = None) -> Dict:
         """Создание кампании рассылки только по контактам из адресной книги"""
         try:
             # Получаем контакты пользователя из адресной книги
@@ -426,6 +426,7 @@ class MessageSender:
                     delay_seconds=delay_seconds,
                     private_message=message,
                     private_list="\n".join(targets),
+                    attachment_path=attachment_path,
                     status="scheduled" if start_in_minutes else "created"
                 )
 
@@ -461,10 +462,10 @@ class MessageSender:
             return {"status": "error", "message": str(e)}
 
     async def start_contacts_campaign(self, account_id: int, message: str, delay_seconds: int = 5, 
-                                    start_in_minutes: Optional[int] = None) -> Dict:
+                                    start_in_minutes: Optional[int] = None, attachment_path: Optional[str] = None) -> Dict:
         """Создание и запуск кампании рассылки по контактам"""
         # Создаем кампанию
-        result = await self.create_contacts_campaign(account_id, message, delay_seconds, start_in_minutes)
+        result = await self.create_contacts_campaign(account_id, message, delay_seconds, start_in_minutes, attachment_path)
         if result["status"] != "success":
             return result
 

@@ -558,9 +558,13 @@ class TelegramManager:
             print(f"Error disconnecting client {account_id}: {e}")
         return False
 
-    async def send_message(self, account_id: int, recipient: str, message: str, file_path: Optional[str] = None) -> Dict:
-        """Отправка сообщения через указанный аккаунт"""
+    async def send_message(self, account_id: int, recipient: str, message: str, file_path: Optional[str] = None, 
+                          schedule_seconds: int = 0) -> Dict:
+        """Отправка сообщения через указанный аккаунт с возможностью отложенной отправки"""
         print(f"Отправка сообщения в {recipient} от аккаунта {account_id}")
+        
+        if schedule_seconds > 0:
+            print(f"Сообщение будет отправлено через {schedule_seconds} секунд используя Telegram scheduling")
 
         try:
             # Получаем клиент для аккаунта
@@ -585,6 +589,13 @@ class TelegramManager:
                 if not recipient.startswith('@') and not recipient.startswith('+') and not recipient.isdigit() and not recipient.startswith('-'):
                     recipient = f"@{recipient}"
 
+                # Рассчитываем время отправки
+                schedule_date = None
+                if schedule_seconds > 0:
+                    from datetime import datetime, timedelta
+                    schedule_date = datetime.utcnow() + timedelta(seconds=schedule_seconds)
+                    print(f"Запланировано на: {schedule_date}")
+
                 # Отправляем сообщение
                 sent_message = None
                 try:
@@ -594,16 +605,24 @@ class TelegramManager:
                         sent_message = await client.send_document(
                             chat_id=recipient,
                             document=file_path,
-                            caption=message if message else None
+                            caption=message if message else None,
+                            schedule_date=schedule_date
                         )
-                        print(f"Файл отправлен успешно")
+                        if schedule_date:
+                            print(f"Файл запланирован к отправке на {schedule_date}")
+                        else:
+                            print(f"Файл отправлен успешно")
                     else:
                         # Отправляем только текст
                         sent_message = await client.send_message(
                             chat_id=recipient,
-                            text=message
+                            text=message,
+                            schedule_date=schedule_date
                         )
-                        print(f"Текстовое сообщение отправлено успешно")
+                        if schedule_date:
+                            print(f"Текстовое сообщение запланировано к отправке на {schedule_date}")
+                        else:
+                            print(f"Текстовое сообщение отправлено успешно")
                 except Exception as send_error:
                     print(f"Ошибка при отправке: {send_error}")
                     raise send_error

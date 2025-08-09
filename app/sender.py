@@ -173,12 +173,16 @@ class MessageSender:
 
                     print(f"Sending message to {recipient} via account {account.id}")
 
-                    # Отправляем сообщение
+                    # Отправляем сообщение с отложенной отправкой через Telegram
+                    # Рассчитываем задержку для текущего сообщения
+                    current_delay = total_sent * campaign.delay_seconds
+                    
                     result = await telegram_manager.send_message(
                         account.id,
                         recipient,
                         message,
-                        campaign.attachment_path
+                        campaign.attachment_path,
+                        schedule_seconds=current_delay
                     )
 
                     print(f"Send result: {result}")
@@ -191,12 +195,14 @@ class MessageSender:
 
                     if result["status"] == "success":
                         total_sent += 1
-                        print(f"Message sent successfully to {recipient}")
+                        if current_delay > 0:
+                            print(f"Message scheduled successfully to {recipient} (will be sent in {current_delay} seconds)")
+                        else:
+                            print(f"Message sent successfully to {recipient}")
                     else:
                         print(f"Failed to send message to {recipient}: {result.get('message', 'Unknown error')}")
 
-                    # Задержка между отправками
-                    await asyncio.sleep(campaign.delay_seconds)
+                    # Убираем задержку, так как используем планировщик Telegram
 
             # Завершаем кампанию
             campaign.status = "completed"

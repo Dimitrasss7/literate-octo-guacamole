@@ -422,6 +422,64 @@ class TelegramManager:
         finally:
             db.close()
 
+    async def get_user_contacts(self, account_id: int) -> Dict:
+        """Получение всех контактов пользователя"""
+        try:
+            client = await self.get_client(account_id)
+            if not client:
+                return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
+
+            contacts = []
+            
+            # Получаем все диалоги пользователя
+            async for dialog in client.get_dialogs():
+                if dialog.chat.type in ["private"]:  # Только приватные чаты
+                    contact_info = {
+                        "id": dialog.chat.id,
+                        "username": dialog.chat.username,
+                        "first_name": dialog.chat.first_name,
+                        "last_name": dialog.chat.last_name,
+                        "phone": getattr(dialog.chat, 'phone_number', None)
+                    }
+                    contacts.append(contact_info)
+
+            return {"status": "success", "contacts": contacts}
+
+        except Exception as e:
+            print(f"Error getting contacts: {str(e)}")
+            return {"status": "error", "message": str(e)}
+
+    async def get_user_chats(self, account_id: int) -> Dict:
+        """Получение всех чатов и каналов пользователя"""
+        try:
+            client = await self.get_client(account_id)
+            if not client:
+                return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
+
+            chats = {"groups": [], "channels": [], "private": []}
+            
+            # Получаем все диалоги пользователя
+            async for dialog in client.get_dialogs():
+                chat_info = {
+                    "id": dialog.chat.id,
+                    "title": dialog.chat.title or f"{dialog.chat.first_name or ''} {dialog.chat.last_name or ''}".strip(),
+                    "username": dialog.chat.username,
+                    "type": dialog.chat.type
+                }
+                
+                if dialog.chat.type == "private":
+                    chats["private"].append(chat_info)
+                elif dialog.chat.type == "group" or dialog.chat.type == "supergroup":
+                    chats["groups"].append(chat_info)
+                elif dialog.chat.type == "channel":
+                    chats["channels"].append(chat_info)
+
+            return {"status": "success", "chats": chats}
+
+        except Exception as e:
+            print(f"Error getting chats: {str(e)}")
+            return {"status": "error", "message": str(e)}
+
     async def send_message(self, account_id: int, chat_id: str, message: str, file_path: Optional[str] = None) -> Dict:
         """Отправка сообщения"""
         try:

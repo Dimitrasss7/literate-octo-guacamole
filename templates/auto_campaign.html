@@ -1,0 +1,268 @@
+
+{% extends "base.html" %}
+
+{% block title %}Автоматическая рассылка{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h2>Автоматическая рассылка</h2>
+    
+    <div class="card">
+        <div class="card-header">
+            <h5>Создать автоматическую рассылку</h5>
+        </div>
+        <div class="card-body">
+            <form id="autoCampaignForm">
+                <div class="mb-3">
+                    <label for="account_id" class="form-label">Аккаунт</label>
+                    <select class="form-select" id="account_id" name="account_id" required>
+                        <option value="">Выберите аккаунт</option>
+                    </select>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="target_types" class="form-label">Типы получателей</label>
+                    <div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" value="private" id="target_private" checked>
+                            <label class="form-check-label" for="target_private">
+                                Приватные сообщения
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" value="groups" id="target_groups">
+                            <label class="form-check-label" for="target_groups">
+                                Группы
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" value="channels" id="target_channels">
+                            <label class="form-check-label" for="target_channels">
+                                Каналы
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="delay_seconds" class="form-label">Задержка между сообщениями (секунды)</label>
+                    <input type="number" class="form-control" id="delay_seconds" name="delay_seconds" value="5" min="1" max="300">
+                </div>
+                
+                <div class="mb-3">
+                    <label for="message" class="form-label">Сообщение</label>
+                    <textarea class="form-control" id="message" name="message" rows="5" required placeholder="Введите текст сообщения..."></textarea>
+                </div>
+                
+                <div class="row">
+                    <div class="col-md-6">
+                        <button type="button" class="btn btn-primary" onclick="createAutoCampaign()">Создать кампанию</button>
+                    </div>
+                    <div class="col-md-6">
+                        <button type="button" class="btn btn-success" onclick="startAutoCampaign()">Создать и запустить</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <div class="mt-4">
+        <h5>Предварительный просмотр получателей</h5>
+        <div id="previewArea" class="card">
+            <div class="card-body">
+                <p class="text-muted">Выберите аккаунт для предварительного просмотра списка получателей</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Загрузка аккаунтов при загрузке страницы
+document.addEventListener('DOMContentLoaded', function() {
+    loadAccounts();
+});
+
+async function loadAccounts() {
+    try {
+        const response = await fetch('/api/accounts');
+        const accounts = await response.json();
+        
+        const select = document.getElementById('account_id');
+        select.innerHTML = '<option value="">Выберите аккаунт</option>';
+        
+        accounts.forEach(account => {
+            if (account.is_active) {
+                const option = document.createElement('option');
+                option.value = account.id;
+                option.textContent = `${account.name} (${account.phone})`;
+                select.appendChild(option);
+            }
+        });
+    } catch (error) {
+        console.error('Ошибка загрузки аккаунтов:', error);
+    }
+}
+
+// Обновление превью при выборе аккаунта
+document.getElementById('account_id').addEventListener('change', function() {
+    if (this.value) {
+        loadPreview(this.value);
+    } else {
+        document.getElementById('previewArea').innerHTML = 
+            '<div class="card-body"><p class="text-muted">Выберите аккаунт для предварительного просмотра списка получателей</p></div>';
+    }
+});
+
+async function loadPreview(accountId) {
+    try {
+        const response = await fetch(`/api/accounts/${accountId}/chats`);
+        const result = await response.json();
+        
+        if (result.status === 'success') {
+            const chats = result.chats;
+            let html = '<div class="card-body">';
+            
+            if (chats.private.length > 0) {
+                html += `<h6>Приватные чаты (${chats.private.length})</h6>`;
+                html += '<ul class="list-unstyled">';
+                chats.private.slice(0, 10).forEach(chat => {
+                    html += `<li>• ${chat.title || 'Без имени'} ${chat.username ? '@' + chat.username : ''}</li>`;
+                });
+                if (chats.private.length > 10) {
+                    html += `<li>... и еще ${chats.private.length - 10}</li>`;
+                }
+                html += '</ul>';
+            }
+            
+            if (chats.groups.length > 0) {
+                html += `<h6>Группы (${chats.groups.length})</h6>`;
+                html += '<ul class="list-unstyled">';
+                chats.groups.slice(0, 10).forEach(chat => {
+                    html += `<li>• ${chat.title} ${chat.username ? '@' + chat.username : ''}</li>`;
+                });
+                if (chats.groups.length > 10) {
+                    html += `<li>... и еще ${chats.groups.length - 10}</li>`;
+                }
+                html += '</ul>';
+            }
+            
+            if (chats.channels.length > 0) {
+                html += `<h6>Каналы (${chats.channels.length})</h6>`;
+                html += '<ul class="list-unstyled">';
+                chats.channels.slice(0, 10).forEach(chat => {
+                    html += `<li>• ${chat.title} ${chat.username ? '@' + chat.username : ''}</li>`;
+                });
+                if (chats.channels.length > 10) {
+                    html += `<li>... и еще ${chats.channels.length - 10}</li>`;
+                }
+                html += '</ul>';
+            }
+            
+            html += '</div>';
+            document.getElementById('previewArea').innerHTML = html;
+        } else {
+            document.getElementById('previewArea').innerHTML = 
+                `<div class="card-body"><p class="text-danger">Ошибка: ${result.message}</p></div>`;
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки превью:', error);
+        document.getElementById('previewArea').innerHTML = 
+            '<div class="card-body"><p class="text-danger">Ошибка загрузки данных</p></div>';
+    }
+}
+
+function getSelectedTargetTypes() {
+    const types = [];
+    if (document.getElementById('target_private').checked) types.push('private');
+    if (document.getElementById('target_groups').checked) types.push('groups');
+    if (document.getElementById('target_channels').checked) types.push('channels');
+    return types;
+}
+
+async function createAutoCampaign() {
+    const formData = {
+        account_id: parseInt(document.getElementById('account_id').value),
+        message: document.getElementById('message').value,
+        delay_seconds: parseInt(document.getElementById('delay_seconds').value),
+        target_types: getSelectedTargetTypes()
+    };
+    
+    if (!formData.account_id || !formData.message) {
+        alert('Пожалуйста, заполните все обязательные поля');
+        return;
+    }
+    
+    if (formData.target_types.length === 0) {
+        alert('Выберите хотя бы один тип получателей');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/auto-campaign', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(formData)
+        });
+        
+        const result = await response.json();
+        
+        if (result.status === 'success') {
+            alert(`Кампания создана успешно! ID: ${result.campaign_id}, Получателей: ${result.recipients_count}`);
+            window.location.href = '/campaigns';
+        } else {
+            alert(`Ошибка: ${result.message}`);
+        }
+    } catch (error) {
+        console.error('Ошибка создания кампании:', error);
+        alert('Произошла ошибка при создании кампании');
+    }
+}
+
+async function startAutoCampaign() {
+    const formData = {
+        account_id: parseInt(document.getElementById('account_id').value),
+        message: document.getElementById('message').value,
+        delay_seconds: parseInt(document.getElementById('delay_seconds').value),
+        target_types: getSelectedTargetTypes()
+    };
+    
+    if (!formData.account_id || !formData.message) {
+        alert('Пожалуйста, заполните все обязательные поля');
+        return;
+    }
+    
+    if (formData.target_types.length === 0) {
+        alert('Выберите хотя бы один тип получателей');
+        return;
+    }
+    
+    if (!confirm('Запустить автоматическую рассылку? Это действие нельзя будет отменить.')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/auto-campaign/start', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(formData)
+        });
+        
+        const result = await response.json();
+        
+        if (result.status === 'success') {
+            alert(`Автоматическая рассылка запущена! ID: ${result.campaign_id}, Получателей: ${result.recipients_count}`);
+            window.location.href = '/campaigns';
+        } else {
+            alert(`Ошибка: ${result.message}`);
+        }
+    } catch (error) {
+        console.error('Ошибка запуска рассылки:', error);
+        alert('Произошла ошибка при запуске рассылки');
+    }
+}
+</script>
+{% endblock %}

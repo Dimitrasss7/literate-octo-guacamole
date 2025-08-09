@@ -35,6 +35,86 @@ class MessageSender:
         finally:
             db.close()
     
+    async def create_auto_campaign(self, account_id: int, message: str, delay_seconds: int = 5, target_types: List[str] = None) -> Dict:
+        """Создание автоматической кампании для всех контактов пользователя"""
+        if target_types is None:
+            target_types = ["private"]  # По умолчанию только приватные сообщения
+        
+        try:
+            from app.telegram_client import telegram_manager
+            
+            # Получаем все чаты пользователя
+            chats_result = await telegram_manager.get_user_chats(account_id)
+            if chats_result["status"] != "success":
+                return {"status": "error", "message": "Не удалось получить список чатов"}
+            
+            chats = chats_result["chats"]
+            recipients = {"private": [], "groups": [], "channels": []}
+            
+            # Формируем списки получателей
+            for chat_type in target_types:
+                if chat_type in chats:
+                    for chat in chats[chat_type]:
+                        if chat["username"]:
+                            recipients[chat_type].append(f"@{chat['username']}")
+                        else:
+                            recipients[chat_type].append(str(chat["id"]))
+            
+            # Создаем кампанию в базе данных
+            db = next(get_db())
+            try:
+                campaign = Campaign(
+                    name=f"Автоматическая рассылка {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                    description="Автоматически созданная кампания для всех контактов",
+                    delay_seconds=delay_seconds,
+                    private_message=message if "private" in target_types else None,
+                    group_message=message if "groups" in target_types else None,
+                    channel_message=message if "channels" in target_types else None,
+                    private_list="\n".join(recipients["private"]) if recipients["private"] else None,
+                    groups_list="\n".join(recipients["groups"]) if recipients["groups"] else None,
+                    channels_list="\n".join(recipients["channels"]) if recipients["channels"] else None,
+                    status="created"
+                )
+                
+                db.add(campaign)
+                db.commit()
+                db.refresh(campaign)
+                
+                return {
+                    "status": "success", 
+                    "campaign_id": campaign.id,
+                    "recipients_count": sum(len(recipients[t]) for t in recipients),
+                    "message": f"Создана автоматическая кампания с {sum(len(recipients[t]) for t in recipients)} получателями"
+                }
+                
+            finally:
+                db.close()
+                
+        except Exception as e:
+            print(f"Error creating auto campaign: {str(e)}")
+            return {"status": "error", "message": str(e)}
+
+    async def start_auto_campaign(self, account_id: int, message: str, delay_seconds: int = 5, target_types: List[str] = None) -> Dict:
+        """Создание и запуск автоматической кампании"""
+        # Создаем кампанию
+        result = await self.create_auto_campaign(account_id, message, delay_seconds, target_types)
+        if result["status"] != "success":
+            return result
+        
+        # Запускаем кампанию
+        campaign_id = result["campaign_id"]
+        start_result = await self.start_campaign(campaign_id)
+        
+        if start_result["status"] == "success":
+            return {
+                "status": "success",
+                "campaign_id": campaign_id,
+                "recipients_count": result["recipients_count"],
+                "message": f"Автоматическая рассылка запущена для {result['recipients_count']} получателей"
+            }
+        else:
+            return start_result
+
     async def stop_campaign(self, campaign_id: int) -> Dict:
         """Остановка кампании"""
         if campaign_id in self.active_campaigns:

@@ -83,10 +83,10 @@ async def verify_code(
         # Валидация входных данных
         if not code or len(code.strip()) == 0:
             return JSONResponse({"status": "error", "message": "Код не может быть пустым"})
-        
+
         if len(code.strip()) != 5:
             return JSONResponse({"status": "error", "message": "Код должен содержать 5 цифр"})
-        
+
         result = await telegram_manager.verify_code(phone, code.strip(), phone_code_hash, session_name, proxy)
 
         # Проверяем, что result не None
@@ -105,14 +105,14 @@ async def verify_code(
     except Exception as e:
         error_msg = str(e)
         print(f"Веб-ошибка при верификации: {error_msg}")
-        
+
         # Логируем ошибку
         with open("unknown_errors.txt", "a", encoding="utf-8") as f:
             f.write(f"Web verify code error: {error_msg}\n")
             f.write(f"Phone: {phone}\n")
             f.write(f"Exception type: {type(e).__name__}\n")
             f.write("---\n")
-        
+
         return JSONResponse({"status": "error", "message": f"Ошибка сервера: {error_msg}"})
 
 @app.post("/accounts/verify_password")
@@ -330,6 +330,109 @@ async def get_stats(db: Session = Depends(get_db)):
             "used": proxy_manager.get_used_proxies_count()
         }
     })
+
+# Новые маршруты для автоматических кампаний и контактов
+@app.get("/api/accounts/{account_id}/contacts")
+async def get_contacts(account_id: int):
+    """Получение контактов аккаунта"""
+    result = await telegram_manager.get_user_contacts(account_id)
+    return JSONResponse(result)
+
+@app.get("/api/accounts/{account_id}/chats")
+async def get_chats(account_id: int):
+    """Получение всех чатов аккаунта"""
+    result = await telegram_manager.get_user_chats(account_id)
+    return JSONResponse(result)
+
+@app.post("/api/auto-campaign")
+async def create_auto_campaign(request: Request):
+    """Создание автоматической кампании"""
+    data = await request.json()
+
+    account_id = data.get('account_id')
+    message = data.get('message')
+    delay_seconds = data.get('delay_seconds', 5)
+    target_types = data.get('target_types', ['private'])
+
+    if not account_id or not message:
+        return JSONResponse({"status": "error", "message": "Не указан аккаунт или сообщение"}), 400
+
+    # Получаем активный аккаунт для рассылки
+    db_session = get_db()
+    account = db_session.query(Account).filter(Account.id == account_id).first()
+    if not account or not account.is_active:
+        return JSONResponse({"status": "error", "message": "Аккаунт неактивен или не найден"}), 400
+
+    # Получаем контакты и чаты в зависимости от target_types
+    target_contacts = []
+    if 'private' in target_types:
+        contacts_result = await get_contacts(account_id)
+        if contacts_result.get("status") == "success":
+            target_contacts.extend(contacts_result.get("contacts", []))
+    if 'group' in target_types:
+        chats_result = await get_chats(account_id)
+        if chats_result.get("status") == "success":
+            target_contacts.extend(chats_result.get("chats", []))
+    if 'channel' in target_types:
+        # Предполагаем, что для каналов тоже есть метод get_user_chats с соответствующими типами
+        chats_result = await get_chats(account_id)
+        if chats_result.get("status") == "success":
+            target_contacts.extend(chats_result.get("chats", []))
+
+    # Удаляем дубликаты и форматируем для message_sender
+    unique_targets = list({target.get('id') or target.get('username') or target.get('title') for target in target_contacts})
+    
+    # Создаем кампанию и запускаем рассылку
+    result = await message_sender.create_and_start_auto_campaign(account_id, message, delay_seconds, unique_targets)
+    return JSONResponse(result)
+
+@app.post("/api/auto-campaign/start")
+async def start_auto_campaign(request: Request):
+    """Создание и запуск автоматической кампании"""
+    data = await request.get_json()
+
+    account_id = data.get('account_id')
+    message = data.get('message')
+    delay_seconds = data.get('delay_seconds', 5)
+    target_types = data.get('target_types', ['private'])
+
+    if not account_id or not message:
+        return JSONResponse({"status": "error", "message": "Не указан аккаунт или сообщение"}), 400
+
+    # Получаем активный аккаунт для рассылки
+    db_session = get_db()
+    account = db_session.query(Account).filter(Account.id == account_id).first()
+    if not account or not account.is_active:
+        return JSONResponse({"status": "error", "message": "Аккаунт неактивен или не найден"}), 400
+
+    # Получаем контакты и чаты в зависимости от target_types
+    target_contacts = []
+    if 'private' in target_types:
+        contacts_result = await get_contacts(account_id)
+        if contacts_result.get("status") == "success":
+            target_contacts.extend(contacts_result.get("contacts", []))
+    if 'group' in target_types:
+        chats_result = await get_chats(account_id)
+        if chats_result.get("status") == "success":
+            target_contacts.extend(chats_result.get("chats", []))
+    if 'channel' in target_types:
+        # Предполагаем, что для каналов тоже есть метод get_user_chats с соответствующими типами
+        chats_result = await get_chats(account_id)
+        if chats_result.get("status") == "success":
+            target_contacts.extend(chats_result.get("chats", []))
+
+    # Удаляем дубликаты и форматируем для message_sender
+    unique_targets = list({target.get('id') or target.get('username') or target.get('title') for target in target_contacts})
+
+    # Создаем кампанию и запускаем рассылку
+    result = await message_sender.create_and_start_auto_campaign(account_id, message, delay_seconds, unique_targets)
+    return JSONResponse(result)
+
+@app.get("/auto-campaign")
+async def auto_campaign_page(request: Request):
+    """Страница создания автоматической кампании"""
+    return templates.TemplateResponse("auto_campaign.html", {"request": request})
+
 
 if __name__ == "__main__":
     import uvicorn

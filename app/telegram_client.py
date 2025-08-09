@@ -617,37 +617,48 @@ class TelegramManager:
                 
                 try:
                     if sent_message:
+                        # Получаем ID сообщения
                         message_id = getattr(sent_message, 'id', None)
                         print(f"Message ID: {message_id}")
                         
-                        # Получаем chat_id из самого сообщения
-                        if hasattr(sent_message, 'chat'):
+                        # Получаем chat_id - сначала пробуем из chat
+                        if hasattr(sent_message, 'chat') and sent_message.chat is not None:
                             chat_obj = sent_message.chat
-                            if chat_obj is not None:
-                                chat_id = getattr(chat_obj, 'id', None)
-                                print(f"Chat ID from chat: {chat_id}")
+                            chat_id = getattr(chat_obj, 'id', None)
+                            print(f"Chat ID from chat: {chat_id}")
                         
-                        # Если chat_id не получен, пробуем через peer_id  
-                        if chat_id is None and hasattr(sent_message, 'peer_id'):
+                        # Если не получилось, пробуем из peer_id
+                        if chat_id is None and hasattr(sent_message, 'peer_id') and sent_message.peer_id is not None:
                             peer_id = sent_message.peer_id
-                            if peer_id is not None:
-                                if hasattr(peer_id, 'user_id'):
-                                    chat_id = peer_id.user_id
-                                elif hasattr(peer_id, 'chat_id'):
-                                    chat_id = peer_id.chat_id
-                                elif hasattr(peer_id, 'channel_id'):
-                                    chat_id = peer_id.channel_id
-                                print(f"Chat ID from peer_id: {chat_id}")
+                            if hasattr(peer_id, 'user_id'):
+                                chat_id = peer_id.user_id
+                            elif hasattr(peer_id, 'chat_id'):
+                                chat_id = peer_id.chat_id  
+                            elif hasattr(peer_id, 'channel_id'):
+                                chat_id = peer_id.channel_id
+                            print(f"Chat ID from peer_id: {chat_id}")
                         
-                        # Если всё еще не получен, попробуем парсить recipient
+                        # Последняя попытка - получить из recipient
                         if chat_id is None:
-                            if recipient.isdigit() or (recipient.startswith('-') and recipient[1:].isdigit()):
-                                chat_id = int(recipient)
+                            try:
+                                if recipient.isdigit():
+                                    chat_id = int(recipient)
+                                elif recipient.startswith('-') and recipient[1:].isdigit():
+                                    chat_id = int(recipient)
+                                elif recipient.startswith('@'):
+                                    # Для username оставляем как есть для логирования
+                                    chat_id = recipient
                                 print(f"Chat ID from recipient: {chat_id}")
+                            except:
+                                chat_id = recipient
+                        
+                        print(f"Final message_id: {message_id}, chat_id: {chat_id}")
                 
                 except Exception as parse_error:
                     print(f"Ошибка при парсинге результата сообщения: {parse_error}")
                     # Продолжаем выполнение, даже если не удалось получить детали
+                    message_id = None
+                    chat_id = recipient
 
                 return {
                     "status": "success",

@@ -621,36 +621,17 @@ class TelegramManager:
                         message_id = getattr(sent_message, 'id', None)
                         print(f"Message ID: {message_id}")
                         
-                        # Получаем chat_id - сначала пробуем из chat
-                        if hasattr(sent_message, 'chat') and sent_message.chat is not None:
-                            chat_obj = sent_message.chat
-                            chat_id = getattr(chat_obj, 'id', None)
-                            print(f"Chat ID from chat: {chat_id}")
-                        
-                        # Если не получилось, пробуем из peer_id
-                        if chat_id is None and hasattr(sent_message, 'peer_id') and sent_message.peer_id is not None:
-                            peer_id = sent_message.peer_id
-                            if hasattr(peer_id, 'user_id'):
-                                chat_id = peer_id.user_id
-                            elif hasattr(peer_id, 'chat_id'):
-                                chat_id = peer_id.chat_id  
-                            elif hasattr(peer_id, 'channel_id'):
-                                chat_id = peer_id.channel_id
-                            print(f"Chat ID from peer_id: {chat_id}")
-                        
-                        # Последняя попытка - получить из recipient
-                        if chat_id is None:
-                            try:
-                                if recipient.isdigit():
-                                    chat_id = int(recipient)
-                                elif recipient.startswith('-') and recipient[1:].isdigit():
-                                    chat_id = int(recipient)
-                                elif recipient.startswith('@'):
-                                    # Для username оставляем как есть для логирования
-                                    chat_id = recipient
-                                print(f"Chat ID from recipient: {chat_id}")
-                            except:
+                        # Получаем chat_id из recipient, так как это самый надежный способ
+                        try:
+                            if recipient.isdigit():
+                                chat_id = int(recipient)
+                            elif recipient.startswith('-') and recipient[1:].isdigit():
+                                chat_id = int(recipient)
+                            else:
                                 chat_id = recipient
+                            print(f"Chat ID from recipient: {chat_id}")
+                        except:
+                            chat_id = recipient
                         
                         print(f"Final message_id: {message_id}, chat_id: {chat_id}")
                 

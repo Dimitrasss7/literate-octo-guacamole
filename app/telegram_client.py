@@ -25,16 +25,18 @@ class TelegramManager:
     async def add_account(self, phone: str, proxy: Optional[str] = None) -> Dict:
         """Добавление нового аккаунта"""
         try:
-            session_name = f"session_{phone.replace('+', '')}"
+            session_name = f"session_{phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')}"
             session_path = os.path.join(SESSIONS_DIR, session_name)
             
-            # Создаем клиент
+            # Создаем клиент с теми же настройками
             client = Client(
                 session_path,
                 api_id=API_ID,
                 api_hash=API_HASH,
                 phone_number=phone,
-                proxy=self._parse_proxy(proxy) if proxy else None
+                proxy=self._parse_proxy(proxy) if proxy else None,
+                sleep_threshold=60,  # Увеличиваем время ожидания
+                max_concurrent_transmissions=1
             )
             
             # Подключаемся и авторизуемся
@@ -49,12 +51,17 @@ class TelegramManager:
                 return {"status": "success", "name": me.first_name}
             except:
                 # Не авторизован - отправляем код
-                sent_code = await client.send_code(phone)
-                return {
-                    "status": "code_required",
-                    "phone_code_hash": sent_code.phone_code_hash,
-                    "session_name": session_name
-                }
+                try:
+                    sent_code = await client.send_code(phone)
+                    # НЕ отключаем клиент, чтобы сохранить сессию
+                    return {
+                        "status": "code_required",
+                        "phone_code_hash": sent_code.phone_code_hash,
+                        "session_name": session_name
+                    }
+                except Exception as send_error:
+                    await client.disconnect()
+                    return {"status": "error", "message": f"Ошибка отправки кода: {str(send_error)}"}
                 
         except Exception as e:
             return {"status": "error", "message": str(e)}
@@ -64,39 +71,51 @@ class TelegramManager:
         try:
             session_path = os.path.join(SESSIONS_DIR, session_name)
             
+            # Используем точно те же параметры, что и при отправке кода
             client = Client(
                 session_path,
                 api_id=API_ID,
                 api_hash=API_HASH,
                 phone_number=phone,
-                proxy=self._parse_proxy(proxy) if proxy else None
+                proxy=self._parse_proxy(proxy) if proxy else None,
+                sleep_threshold=60,  # Увеличиваем время ожидания
+                max_concurrent_transmissions=1
             )
             
             await client.connect()
             
             try:
-                await client.sign_in(phone, phone_code_hash, code)
+                # Убираем лишние пробелы и символы из кода
+                clean_code = code.strip().replace(' ', '').replace('-', '')
+                signed_in = await client.sign_in(phone, phone_code_hash, clean_code)
+                
+                if hasattr(signed_in, 'user'):
+                    # Успешная авторизация
+                    me = await client.get_me()
+                    await self._save_account(phone, session_path, me.first_name, proxy)
+                    await client.disconnect()
+                    return {"status": "success", "name": me.first_name}
+                    
             except SessionPasswordNeeded:
                 await client.disconnect()
                 return {"status": "password_required", "session_name": session_name}
+            except Exception as sign_in_error:
+                await client.disconnect()
+                error_msg = str(sign_in_error).upper()
+                
+                if "PHONE_CODE_EXPIRED" in error_msg:
+                    return {"status": "code_expired", "message": "Код подтверждения истек. Запросите новый код."}
+                elif "PHONE_CODE_INVALID" in error_msg or "CODE_INVALID" in error_msg:
+                    return {"status": "error", "message": "Неверный код подтверждения"}
+                elif "PHONE_CODE_EMPTY" in error_msg:
+                    return {"status": "error", "message": "Введите код подтверждения"}
+                elif "TOO_MANY_REQUESTS" in error_msg or "FLOOD_WAIT" in error_msg:
+                    return {"status": "error", "message": "Слишком много попыток. Попробуйте позже"}
+                else:
+                    return {"status": "error", "message": f"Ошибка авторизации: {sign_in_error}"}
             
-            me = await client.get_me()
-            await self._save_account(phone, session_path, me.first_name, proxy)
-            await client.disconnect()
-            
-            return {"status": "success", "name": me.first_name}
-            
-        except PhoneCodeInvalid:
-            return {"status": "error", "message": "Неверный код"}
         except Exception as e:
-            error_message = str(e)
-            # Проверяем на истечение кода
-            if "PHONE_CODE_EXPIRED" in error_message:
-                return {"status": "code_expired", "message": "Код подтверждения истек. Запросите новый код."}
-            elif "PHONE_CODE_INVALID" in error_message:
-                return {"status": "error", "message": "Неверный код подтверждения"}
-            else:
-                return {"status": "error", "message": error_message}
+            return {"status": "error", "message": f"Ошибка соединения: {str(e)}"}
     
     async def verify_password(self, phone: str, password: str, session_name: str, proxy: Optional[str] = None) -> Dict:
         """Подтверждение двухфакторной аутентификации"""

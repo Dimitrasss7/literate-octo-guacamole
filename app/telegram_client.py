@@ -131,6 +131,9 @@ class TelegramManager:
             if session_name in self.pending_clients:
                 del self.pending_clients[session_name]
             return {"status": "error", "message": f"Ошибка соединения: {str(e)}"}
+        
+        # Fallback return на случай если ничего не вернулось
+        return {"status": "error", "message": "Неизвестная ошибка при верификации кода"}
     
     async def verify_password(self, phone: str, password: str, session_name: str, proxy: Optional[str] = None) -> Dict:
         """Подтверждение двухфакторной аутентификации"""

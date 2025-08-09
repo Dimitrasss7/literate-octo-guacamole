@@ -72,16 +72,24 @@ async def verify_code(
     proxy: Optional[str] = Form(None)
 ):
     """Подтверждение кода"""
-    result = await telegram_manager.verify_code(phone, code, phone_code_hash, session_name, proxy)
-    
-    # Если код истек, автоматически отправляем новый
-    if result.get("status") == "code_expired":
-        new_code_result = await telegram_manager.add_account(phone, proxy)
-        if new_code_result.get("status") == "code_required":
-            result["new_phone_code_hash"] = new_code_result["phone_code_hash"]
-            result["message"] = "Код истек. Новый код отправлен на ваш номер."
-    
-    return JSONResponse(result)
+    try:
+        result = await telegram_manager.verify_code(phone, code, phone_code_hash, session_name, proxy)
+        
+        # Проверяем, что result не None
+        if result is None:
+            result = {"status": "error", "message": "Внутренняя ошибка сервера"}
+        
+        # Если код истек, автоматически отправляем новый
+        if result.get("status") == "code_expired":
+            new_code_result = await telegram_manager.add_account(phone, proxy)
+            if new_code_result and new_code_result.get("status") == "code_required":
+                result["new_phone_code_hash"] = new_code_result["phone_code_hash"]
+                result["message"] = "Код истек. Новый код отправлен на ваш номер."
+        
+        return JSONResponse(result)
+        
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": f"Ошибка при подтверждении кода: {str(e)}"})
 
 @app.post("/accounts/verify_password")
 async def verify_password(

@@ -28,6 +28,34 @@ class TelegramManager:
         self.clients: Dict[int, Client] = {}
         self.pending_clients: Dict[str, Client] = {}  # Для хранения клиентов ожидающих код
         self.cipher = Fernet(ENCRYPTION_KEY)
+        self._cleanup_temp_sessions()
+
+    def _cleanup_temp_sessions(self):
+        """Очистка временных файлов сессий"""
+        try:
+            if not os.path.exists(SESSIONS_DIR):
+                return
+            for filename in os.listdir(SESSIONS_DIR):
+                if filename.startswith('temp_client_') and filename.endswith('.session'):
+                    temp_path = os.path.join(SESSIONS_DIR, filename)
+                    try:
+                        os.remove(temp_path)
+                        print(f"Removed temporary session: {filename}")
+                    except:
+                        pass
+        except Exception as e:
+            print(f"Error cleaning temp sessions: {e}")
+
+    async def cleanup_client(self, account_id: int):
+        """Принудительная очистка клиента"""
+        if account_id in self.clients:
+            client = self.clients[account_id]
+            try:
+                await client.stop()
+            except:
+                pass
+            del self.clients[account_id]
+            print(f"Cleaned up client for account {account_id}")
 
     def encrypt_session(self, session_data: str) -> str:
         return self.cipher.encrypt(session_data.encode()).decode()
@@ -267,7 +295,7 @@ class TelegramManager:
         }
 
     async def get_client(self, account_id: int) -> Optional[Client]:
-        """Получение клиента для аккаунта - исправленная версия"""
+        """Получение клиента для аккаунта с исправлением проблем с базой данных"""
         # Сначала проверяем кэш
         if account_id in self.clients:
             client = self.clients[account_id]
@@ -305,11 +333,9 @@ class TelegramManager:
             ]
             
             print(f"Looking for session file for account {account_id}, phone: {account.phone}")
-            print(f"Checking files: {possible_names}")
             
             for name in possible_names:
                 path = os.path.join(SESSIONS_DIR, name)
-                print(f"Checking: {path}")
                 if os.path.exists(path):
                     session_file = path
                     print(f"Found session file: {path}")
@@ -317,36 +343,41 @@ class TelegramManager:
             
             if not session_file:
                 print(f"No session file found for account {account_id}")
-                # Показываем что есть в папке
-                session_files = [f for f in os.listdir(SESSIONS_DIR) if f.endswith('.session')]
-                print(f"Available session files: {session_files}")
                 return None
 
-            # Убираем .session из пути для Pyrogram
-            session_name = session_file.replace('.session', '')
+            # Создаем уникальное имя для временной сессии чтобы избежать конфликтов
+            import tempfile
+            temp_session_name = f"temp_client_{account_id}_{int(datetime.utcnow().timestamp())}"
+            temp_session_path = os.path.join(SESSIONS_DIR, temp_session_name)
             
-            print(f"Creating client with session: {session_name}")
-            
-            # Создаем клиент с правильными настройками
             try:
+                # Копируем оригинальный файл сессии во временный
+                import shutil
+                shutil.copy2(session_file, f"{temp_session_path}.session")
+                
+                print(f"Creating client with temporary session: {temp_session_name}")
+                
+                # Создаем клиент с временной сессией
                 client = Client(
-                    name=session_name,
+                    name=temp_session_name,
                     api_id=API_ID,
                     api_hash=API_HASH,
                     proxy=self._parse_proxy(account.proxy) if account.proxy else None,
                     no_updates=True,
                     takeout=False,
-                    workdir=SESSIONS_DIR  # Указываем рабочую папку
+                    workdir=SESSIONS_DIR,
+                    sleep_threshold=60,
+                    max_concurrent_transmissions=1
                 )
 
                 print(f"Starting client for account {account_id}...")
                 
-                # Подключаемся без интерактивного ввода
-                await client.connect()
+                # Подключаемся с тайм-аутом
+                await asyncio.wait_for(client.start(), timeout=30.0)
                 
                 # Проверяем авторизацию
                 try:
-                    me = await client.get_me()
+                    me = await asyncio.wait_for(client.get_me(), timeout=10.0)
                     print(f"Client authorized as: {me.first_name} (ID: {me.id})")
                     
                     # Кэшируем клиент
@@ -359,14 +390,29 @@ class TelegramManager:
                     
                     return client
                     
+                except asyncio.TimeoutError:
+                    print(f"Timeout getting user info for account {account_id}")
+                    await client.stop()
+                    return None
                 except Exception as auth_error:
                     print(f"Client not authorized: {auth_error}")
-                    await client.disconnect()
+                    await client.stop()
                     return None
                     
+            except asyncio.TimeoutError:
+                print(f"Timeout starting client for account {account_id}")
+                return None
             except Exception as client_error:
                 print(f"Error creating client: {client_error}")
                 return None
+            finally:
+                # Очищаем временный файл сессии
+                try:
+                    temp_file = f"{temp_session_path}.session"
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
+                except:
+                    pass
 
         except Exception as e:
             print(f"Error in get_client for account {account_id}: {str(e)}")

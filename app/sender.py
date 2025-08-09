@@ -65,7 +65,6 @@ class MessageSender:
             try:
                 campaign = Campaign(
                     name=f"Автоматическая рассылка {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-                    description="Автоматически созданная кампания для всех контактов",
                     delay_seconds=delay_seconds,
                     private_message=message if "private" in target_types else None,
                     group_message=message if "groups" in target_types else None,
@@ -376,7 +375,6 @@ class MessageSender:
         try:
             campaign = Campaign(
                 name=name,
-                description=message,
                 private_message=message,
                 private_list="\n".join(targets),
                 account_id=account_id,
@@ -425,7 +423,6 @@ class MessageSender:
 
                 campaign = Campaign(
                     name=f"Рассылка по контактам {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-                    description=f"Рассылка сообщения по {len(targets)} контактам из адресной книги",
                     delay_seconds=delay_seconds,
                     private_message=message,
                     private_list="\n".join(targets),

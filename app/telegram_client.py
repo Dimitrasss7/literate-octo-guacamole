@@ -40,20 +40,21 @@ class TelegramManager:
             # Подключаемся и авторизуемся
             await client.connect()
             
-            if not await client.is_user_authorized():
-                # Отправляем код
+            try:
+                # Проверяем авторизацию через получение информации о себе
+                me = await client.get_me()
+                # Если дошли до сюда - уже авторизован
+                await self._save_account(phone, session_path, me.first_name, proxy)
+                await client.disconnect()
+                return {"status": "success", "name": me.first_name}
+            except:
+                # Не авторизован - отправляем код
                 sent_code = await client.send_code(phone)
                 return {
                     "status": "code_required",
                     "phone_code_hash": sent_code.phone_code_hash,
                     "session_name": session_name
                 }
-            else:
-                # Уже авторизован
-                me = await client.get_me()
-                await self._save_account(phone, session_path, me.first_name, proxy)
-                await client.disconnect()
-                return {"status": "success", "name": me.first_name}
                 
         except Exception as e:
             return {"status": "error", "message": str(e)}

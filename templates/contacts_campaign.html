@@ -1,4 +1,3 @@
-
 {% extends "base.html" %}
 
 {% block title %}Рассылка по контактам - Telegram Mass Sender{% endblock %}
@@ -121,7 +120,7 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             const response = await fetch('/api/accounts');
             const accounts = await response.json();
-            
+
             accountSelect.innerHTML = '<option value="">Выберите аккаунт</option>';
             accounts.forEach(account => {
                 if (account.is_active) {
@@ -142,7 +141,7 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             const response = await fetch('/api/scheduled-campaigns');
             const data = await response.json();
-            
+
             if (data.scheduled_campaigns && data.scheduled_campaigns.length > 0) {
                 scheduledCampaigns.innerHTML = data.scheduled_campaigns.map(id => 
                     `<div class="d-flex justify-content-between align-items-center mb-2">
@@ -199,38 +198,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Обработчик изменения файла
-    const attachmentFile = document.getElementById('attachmentFile');
-    const fileInfo = document.getElementById('fileInfo');
-    const fileName = document.getElementById('fileName');
-    const fileSize = document.getElementById('fileSize');
-
-    attachmentFile.addEventListener('change', function(e) {
-        const file = e.target.files[0];
-        if (file) {
-            fileName.textContent = file.name;
-            fileSize.textContent = formatFileSize(file.size);
-            fileInfo.style.display = 'block';
-            
-            // Проверка размера файла (50 МБ)
-            if (file.size > 50 * 1024 * 1024) {
-                alert('Файл слишком большой. Максимальный размер: 50 МБ');
-                attachmentFile.value = '';
-                fileInfo.style.display = 'none';
-            }
-        } else {
-            fileInfo.style.display = 'none';
-        }
-    });
-
-    function formatFileSize(bytes) {
-        if (bytes === 0) return '0 Bytes';
-        const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-    }
-
     // Отправка формы
     contactsCampaignForm.addEventListener('submit', async function(e) {
         e.preventDefault();
@@ -239,7 +206,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const message = document.getElementById('message').value;
         const delaySeconds = parseInt(document.getElementById('delaySeconds').value);
         const startInMinutes = document.getElementById('startInMinutes').value;
-        const file = attachmentFile.files[0];
 
         if (!accountId || !message) {
             alert('Заполните все обязательные поля');
@@ -252,14 +218,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
         try {
             const formData = new FormData();
-            formData.append('account_id', parseInt(accountId));
+            formData.append('account_id', accountId);
             formData.append('message', message);
             formData.append('delay_seconds', delaySeconds);
             if (startInMinutes) {
-                formData.append('start_in_minutes', parseInt(startInMinutes));
-            }
-            if (file) {
-                formData.append('attachment', file);
+                formData.append('start_in_minutes', startInMinutes);
             }
 
             const response = await fetch('/api/contacts-campaign/start', {
@@ -268,7 +231,7 @@ document.addEventListener('DOMContentLoaded', function() {
             });
 
             const result = await response.json();
-            
+
             // Показываем результат в модальном окне
             const resultMessage = document.getElementById('resultMessage');
             if (result.status === 'success') {
@@ -322,7 +285,7 @@ document.addEventListener('DOMContentLoaded', function() {
             });
 
             const result = await response.json();
-            
+
             if (result.status === 'success') {
                 alert('Кампания отменена');
                 loadScheduledCampaigns();
@@ -338,7 +301,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Загружаем данные при старте
     loadAccounts();
     loadScheduledCampaigns();
-    
+
     // Обновляем запланированные кампании каждые 30 секунд
     setInterval(loadScheduledCampaigns, 30000);
 });

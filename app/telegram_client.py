@@ -364,13 +364,17 @@ class TelegramManager:
                 contacts = await client.get_contacts()
 
                 for contact in contacts:
+                    # Проверяем что контакт не None
+                    if contact is None:
+                        continue
+                        
                     # Безопасное получение атрибутов
                     first_name = getattr(contact, 'first_name', '') or ""
                     last_name = getattr(contact, 'last_name', '') or ""
                     username = getattr(contact, 'username', '') or ""
 
                     contact_data = {
-                        "id": contact.id,
+                        "id": getattr(contact, 'id', 0),
                         "first_name": first_name,
                         "last_name": last_name,
                         "username": username,
@@ -378,7 +382,7 @@ class TelegramManager:
                         "is_bot": getattr(contact, 'is_bot', False),
                         "is_verified": getattr(contact, 'is_verified', False),
                         "is_premium": getattr(contact, 'is_premium', False),
-                        "display_name": f"{first_name} {last_name}".strip() or username or f"User {contact.id}"
+                        "display_name": f"{first_name} {last_name}".strip() or username or f"User {getattr(contact, 'id', 0)}"
                     }
                     contacts_list.append(contact_data)
 
@@ -561,6 +565,11 @@ class TelegramManager:
     async def _resolve_peer(self, client: Client, recipient: str) -> Optional[str]:
         """Разрешает получателя в chat_id"""
         try:
+            if not recipient or recipient.strip() == "":
+                return None
+                
+            recipient = recipient.strip()
+            
             # Если это уже числовой ID или группа/канал с типом -100..., используем как есть
             if recipient.isdigit() or (recipient.startswith('-') and recipient[1:].isdigit()):
                 return recipient
@@ -569,35 +578,38 @@ class TelegramManager:
             if recipient.startswith('@'):
                 recipient = recipient[1:] # Убираем @
 
+            if not recipient:
+                return None
+
             try:
                 # Пробуем получить пользователя по username
                 user = await client.get_users(recipient)
-                if user:
+                if user and hasattr(user, 'id'):
                     return str(user.id)
-            except:
-                pass # Не нашли пользователя, пробуем чат
+            except Exception as e:
+                print(f"Не удалось найти пользователя {recipient}: {e}")
 
             try:
                 # Пробуем получить чат по username
                 chat = await client.get_chat(recipient)
-                if chat:
+                if chat and hasattr(chat, 'id'):
                     return str(chat.id)
-            except:
-                pass # Не нашли чат
+            except Exception as e:
+                print(f"Не удалось найти чат {recipient}: {e}")
 
             # Если получатель не является username, пробуем найти его по номеру телефона
             if not recipient.startswith('@') and not recipient.startswith('+') and recipient.isdigit():
                 try:
-                    user = await client.get_user_by_phone_number(f"+{recipient}") # Добавляем + для номера
-                    if user:
+                    user = await client.get_users(f"+{recipient}")
+                    if user and hasattr(user, 'id'):
                         return str(user.id)
-                except:
-                    pass
+                except Exception as e:
+                    print(f"Не удалось найти пользователя по номеру {recipient}: {e}")
 
             return None # Не удалось разрешить получателя
 
         except Exception as e:
-            print(f"Ошибка разрешения получателя {recipient}: {e}")
+            print(f"Общая ошибка разрешения получателя {recipient}: {e}")
             return None
 
     async def send_file(self, account_id: int, chat_id: str, file_path: str, 
@@ -613,6 +625,10 @@ class TelegramManager:
 
             file_size = os.path.getsize(file_path)
             file_name = os.path.basename(file_path)
+
+            # Проверяем что chat_id валидный
+            if not chat_id or chat_id == "None":
+                return {"status": "error", "message": "Неверный ID чата"}
 
             print(f"Отправляем файл: {file_name} ({file_size} байт) в чат {chat_id}")
 

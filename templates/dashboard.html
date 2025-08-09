@@ -1,0 +1,94 @@
+
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Telegram Mass Sender{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+    <h1 class="h2">Dashboard</h1>
+</div>
+
+<!-- Статистика -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Всего аккаунтов</h5>
+                <h2 class="text-primary">{{ stats.total_accounts }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Активных</h5>
+                <h2 class="text-success">{{ stats.active_accounts }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Кампаний</h5>
+                <h2 class="text-info">{{ stats.total_campaigns }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Сообщений сегодня</h5>
+                <h2 class="text-warning">{{ stats.messages_sent_today }}</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Аккаунты -->
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5>Аккаунты</h5>
+            </div>
+            <div class="card-body">
+                {% for account in accounts[:5] %}
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div>
+                        <strong>{{ account.name or account.phone }}</strong><br>
+                        <small class="text-muted">{{ account.phone }}</small>
+                    </div>
+                    <span class="badge bg-{% if account.status == 'online' %}success{% elif account.status == 'offline' %}secondary{% elif account.status == 'error' %}danger{% else %}warning{% endif %}">
+                        {{ account.status }}
+                    </span>
+                </div>
+                {% endfor %}
+                <a href="/accounts" class="btn btn-sm btn-outline-primary">Все аккаунты</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Последние кампании -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5>Последние кампании</h5>
+            </div>
+            <div class="card-body">
+                {% for campaign in campaigns[:5] %}
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div>
+                        <strong>{{ campaign.name }}</strong><br>
+                        <small class="text-muted">{{ campaign.created_at.strftime('%d.%m.%Y %H:%M') }}</small>
+                    </div>
+                    <span class="badge bg-{% if campaign.status == 'running' %}primary{% elif campaign.status == 'completed' %}success{% elif campaign.status == 'paused' %}warning{% else %}secondary{% endif %}">
+                        {{ campaign.status }}
+                    </span>
+                </div>
+                {% endfor %}
+                <a href="/campaigns" class="btn btn-sm btn-outline-primary">Все кампании</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -384,6 +384,23 @@ class TelegramManager:
 
             except Exception as start_error:
                 print(f"Error starting client: {str(start_error)}")
+                
+                # Если ошибка связана с блокировкой базы данных или клиент уже подключен
+                if "database is locked" in str(start_error) or "already connected" in str(start_error):
+                    # Ждем немного и пробуем еще раз
+                    await asyncio.sleep(2)
+                    try:
+                        # Проверяем, что клиент работает
+                        me = await client.get_me()
+                        print(f"Client verified after retry for {me.first_name}")
+                        self.clients[account_id] = client
+                        account.status = "online"
+                        account.last_activity = datetime.utcnow()
+                        db.commit()
+                        return client
+                    except:
+                        pass
+                
                 # Пробуем удалить временный файл сессии и создать заново
                 try:
                     temp_session_file = f"{session_path}.session"
@@ -432,34 +449,67 @@ class TelegramManager:
             contacts = []
             
             try:
-                # Получаем контакты через метод get_contacts
+                # Получаем контакты через правильный метод iter_contacts
                 async for contact in client.get_contacts():
-                    contact_info = {
-                        "id": contact.id,
-                        "username": contact.username,
-                        "first_name": contact.first_name,
-                        "last_name": contact.last_name,
-                        "phone": getattr(contact, 'phone_number', None)
-                    }
-                    contacts.append(contact_info)
+                    try:
+                        contact_info = {
+                            "id": contact.id,
+                            "username": contact.username,
+                            "first_name": contact.first_name,
+                            "last_name": contact.last_name,
+                            "phone": getattr(contact, 'phone_number', None)
+                        }
+                        contacts.append(contact_info)
+                    except Exception as contact_error:
+                        print(f"Error processing contact: {contact_error}")
+                        continue
                     
-                print(f"Found {len(contacts)} contacts for account {account_id}")
+                print(f"Found {len(contacts)} contacts via get_contacts for account {account_id}")
                 
             except Exception as contacts_error:
                 print(f"Error getting contacts via get_contacts: {contacts_error}")
-                # Fallback: получаем приватные диалоги
-                async for dialog in client.get_dialogs():
-                    if dialog.chat.type in ["private"] and not dialog.chat.is_self:
-                        contact_info = {
-                            "id": dialog.chat.id,
-                            "username": dialog.chat.username,
-                            "first_name": dialog.chat.first_name,
-                            "last_name": dialog.chat.last_name,
-                            "phone": getattr(dialog.chat, 'phone_number', None)
-                        }
-                        contacts.append(contact_info)
-                        
-                print(f"Found {len(contacts)} private dialogs for account {account_id}")
+                
+                # Fallback 1: получаем контакты через iter_contacts если доступно
+                try:
+                    if hasattr(client, 'iter_contacts'):
+                        async for contact in client.iter_contacts():
+                            try:
+                                contact_info = {
+                                    "id": contact.id,
+                                    "username": contact.username,
+                                    "first_name": contact.first_name,
+                                    "last_name": contact.last_name,
+                                    "phone": getattr(contact, 'phone_number', None)
+                                }
+                                contacts.append(contact_info)
+                            except Exception as contact_error:
+                                print(f"Error processing contact via iter_contacts: {contact_error}")
+                                continue
+                        print(f"Found {len(contacts)} contacts via iter_contacts for account {account_id}")
+                except Exception as iter_error:
+                    print(f"Error getting contacts via iter_contacts: {iter_error}")
+                
+                # Fallback 2: получаем приватные диалоги
+                if len(contacts) == 0:
+                    try:
+                        async for dialog in client.get_dialogs():
+                            if dialog.chat.type in ["private"] and not dialog.chat.is_self:
+                                try:
+                                    contact_info = {
+                                        "id": dialog.chat.id,
+                                        "username": dialog.chat.username,
+                                        "first_name": dialog.chat.first_name,
+                                        "last_name": dialog.chat.last_name,
+                                        "phone": getattr(dialog.chat, 'phone_number', None)
+                                    }
+                                    contacts.append(contact_info)
+                                except Exception as dialog_error:
+                                    print(f"Error processing dialog: {dialog_error}")
+                                    continue
+                                    
+                        print(f"Found {len(contacts)} private dialogs for account {account_id}")
+                    except Exception as dialogs_error:
+                        print(f"Error getting dialogs: {dialogs_error}")
 
             return {"status": "success", "contacts": contacts}
 
@@ -476,23 +526,35 @@ class TelegramManager:
 
             chats = {"groups": [], "channels": [], "private": []}
             
-            # Получаем все диалоги пользователя
-            async for dialog in client.get_dialogs():
-                chat_info = {
-                    "id": dialog.chat.id,
-                    "title": dialog.chat.title or f"{dialog.chat.first_name or ''} {dialog.chat.last_name or ''}".strip(),
-                    "username": dialog.chat.username,
-                    "type": dialog.chat.type
-                }
-                
-                if dialog.chat.type == "private":
-                    chats["private"].append(chat_info)
-                elif dialog.chat.type == "group" or dialog.chat.type == "supergroup":
-                    chats["groups"].append(chat_info)
-                elif dialog.chat.type == "channel":
-                    chats["channels"].append(chat_info)
+            try:
+                # Получаем все диалоги пользователя
+                dialog_count = 0
+                async for dialog in client.get_dialogs():
+                    try:
+                        dialog_count += 1
+                        chat_info = {
+                            "id": dialog.chat.id,
+                            "title": dialog.chat.title or f"{dialog.chat.first_name or ''} {dialog.chat.last_name or ''}".strip(),
+                            "username": dialog.chat.username,
+                            "type": dialog.chat.type
+                        }
+                        
+                        if dialog.chat.type == "private":
+                            chats["private"].append(chat_info)
+                        elif dialog.chat.type == "group" or dialog.chat.type == "supergroup":
+                            chats["groups"].append(chat_info)
+                        elif dialog.chat.type == "channel":
+                            chats["channels"].append(chat_info)
+                    except Exception as dialog_error:
+                        print(f"Error processing dialog {dialog_count}: {dialog_error}")
+                        continue
 
-            return {"status": "success", "chats": chats}
+                print(f"Found {dialog_count} dialogs for account {account_id}: {len(chats['private'])} private, {len(chats['groups'])} groups, {len(chats['channels'])} channels")
+                return {"status": "success", "chats": chats}
+                
+            except Exception as dialogs_error:
+                print(f"Error getting dialogs: {dialogs_error}")
+                return {"status": "error", "message": f"Ошибка получения диалогов: {str(dialogs_error)}"}
 
         except Exception as e:
             print(f"Error getting chats: {str(e)}")

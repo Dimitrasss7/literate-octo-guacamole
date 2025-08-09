@@ -560,55 +560,61 @@ class TelegramManager:
             if not client:
                 return {"status": "error", "message": "Клиент не найден"}
 
-            # Получаем информацию о получателе
+            # Проверяем, что клиент подключен
+            if not client.is_connected:
+                await client.connect()
+
             try:
                 # Если это username, добавляем @ если его нет
                 if not recipient.startswith('@') and not recipient.startswith('+') and not recipient.isdigit() and not recipient.startswith('-'):
                     recipient = f"@{recipient}"
 
-                # Получаем пользователя/чат
-                if recipient.startswith('@'):
-                    # Username
-                    peer = await client.resolve_peer(recipient)
-                elif recipient.startswith('+'):
-                    # Invite link
-                    peer = await client.resolve_peer(recipient)
-                else:
-                    # ID чата
-                    peer = await client.resolve_peer(int(recipient))
-
-                # Отправляем сообщение
+                # Отправляем сообщение напрямую без resolve_peer
                 if file_path and os.path.exists(file_path):
                     # Отправляем с файлом
                     sent_message = await client.send_document(
-                        chat_id=peer,
+                        chat_id=recipient,
                         document=file_path,
                         caption=message
                     )
                 else:
                     # Отправляем только текст
                     sent_message = await client.send_message(
-                        chat_id=peer,
+                        chat_id=recipient,
                         text=message
                     )
 
                 # Обновляем статистику аккаунта
                 await self._update_account_stats(account_id)
 
+                # Безопасное получение chat_id
+                chat_id = None
+                if hasattr(sent_message, 'chat') and sent_message.chat:
+                    chat_id = getattr(sent_message.chat, 'id', None)
+
                 return {
                     "status": "success",
                     "message_id": sent_message.id,
-                    "chat_id": sent_message.chat.id if hasattr(sent_message.chat, 'id') else None
+                    "chat_id": chat_id
                 }
 
             except Exception as e:
                 error_msg = str(e)
                 print(f"Ошибка отправки сообщения: {error_msg}")
-                return {"status": "error", "message": error_msg}
+                
+                # Обработка специфических ошибок
+                if "PEER_ID_INVALID" in error_msg:
+                    return {"status": "error", "message": f"Пользователь {recipient} не найден или недоступен"}
+                elif "USER_IS_BLOCKED" in error_msg:
+                    return {"status": "error", "message": f"Пользователь {recipient} заблокировал бота"}
+                elif "CHAT_WRITE_FORBIDDEN" in error_msg:
+                    return {"status": "error", "message": f"Нет прав для записи в чат {recipient}"}
+                else:
+                    return {"status": "error", "message": error_msg}
 
         except Exception as e:
             error_msg = str(e)
-            print(f"Ошибка отправки сообщения: {error_msg}")
+            print(f"Общая ошибка отправки сообщения: {error_msg}")
             return {"status": "error", "message": error_msg}
 
     async def _update_account_stats(self, account_id: int):

@@ -89,7 +89,14 @@ class TelegramManager:
         except PhoneCodeInvalid:
             return {"status": "error", "message": "Неверный код"}
         except Exception as e:
-            return {"status": "error", "message": str(e)}
+            error_message = str(e)
+            # Проверяем на истечение кода
+            if "PHONE_CODE_EXPIRED" in error_message:
+                return {"status": "code_expired", "message": "Код подтверждения истек. Запросите новый код."}
+            elif "PHONE_CODE_INVALID" in error_message:
+                return {"status": "error", "message": "Неверный код подтверждения"}
+            else:
+                return {"status": "error", "message": error_message}
     
     async def verify_password(self, phone: str, password: str, session_name: str, proxy: Optional[str] = None) -> Dict:
         """Подтверждение двухфакторной аутентификации"""

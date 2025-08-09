@@ -73,6 +73,14 @@ async def verify_code(
 ):
     """Подтверждение кода"""
     result = await telegram_manager.verify_code(phone, code, phone_code_hash, session_name, proxy)
+    
+    # Если код истек, автоматически отправляем новый
+    if result.get("status") == "code_expired":
+        new_code_result = await telegram_manager.add_account(phone, proxy)
+        if new_code_result.get("status") == "code_required":
+            result["new_phone_code_hash"] = new_code_result["phone_code_hash"]
+            result["message"] = "Код истек. Новый код отправлен на ваш номер."
+    
     return JSONResponse(result)
 
 @app.post("/accounts/verify_password")

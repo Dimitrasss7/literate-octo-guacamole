@@ -82,7 +82,7 @@ async def verify_code(
     try:
         # Очищаем код от лишних символов
         clean_code = ''.join(filter(str.isdigit, code.strip()))
-        
+
         # Валидация входных данных
         if not clean_code:
             return JSONResponse({"status": "error", "message": "Код не может быть пустым"})
@@ -91,7 +91,7 @@ async def verify_code(
             return JSONResponse({"status": "error", "message": f"Код должен содержать ровно 5 цифр, получено: {len(clean_code)}"})
 
         print(f"Проверяем код: '{clean_code}' для номера {phone}")
-        
+
         result = await telegram_manager.verify_code(phone, clean_code, phone_code_hash, session_name, proxy)
 
         # Проверяем, что result не None
@@ -387,7 +387,7 @@ async def create_contacts_campaign(request: Request, db: Session = Depends(get_d
     """Создание кампании рассылки по контактам"""
     try:
         data = await request.json()
-        
+
         account_id = data.get('account_id')
         message = data.get('message')
         delay_seconds = data.get('delay_seconds', 5)
@@ -404,9 +404,9 @@ async def create_contacts_campaign(request: Request, db: Session = Depends(get_d
         result = await message_sender.create_contacts_campaign(
             account_id, message, delay_seconds, start_in_minutes
         )
-        
+
         return JSONResponse(result)
-        
+
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)})
 
@@ -437,7 +437,7 @@ async def start_contacts_campaign(
             file_extension = os.path.splitext(attachment.filename)[1]
             safe_filename = f"{uuid.uuid4()}{file_extension}"
             file_path = os.path.join(UPLOADS_DIR, safe_filename)
-            
+
             # Сохраняем файл
             with open(file_path, "wb") as f:
                 content = await attachment.read()
@@ -447,9 +447,9 @@ async def start_contacts_campaign(
         result = await message_sender.start_contacts_campaign(
             account_id, message, delay_seconds, start_in_minutes, attachment_path
         )
-        
+
         return JSONResponse(result)
-        
+
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)})
 
@@ -480,8 +480,78 @@ async def get_dialogs(account_id: int, db: Session = Depends(get_db)):
             status_code=500
         )
 
+@app.post("/api/upload-file")
+async def upload_file(file: UploadFile = File(...)):
+    """Загрузка файла для рассылки"""
+    try:
+        # Проверяем, что файл был загружен
+        if not file.filename:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Файл не выбран"}
+            )
 
+        # Читаем содержимое файла
+        content = await file.read()
 
+        # Проверяем размер файла
+        if len(content) == 0:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Файл пустой"}
+            )
+
+        if len(content) > 50 * 1024 * 1024:  # 50MB
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Файл слишком большой. Максимальный размер: 50 МБ"}
+            )
+
+        # Создаем папку uploads если её нет
+        os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+        # Генерируем уникальное имя файла
+        import uuid
+        file_extension = os.path.splitext(file.filename)[1]
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        file_path = os.path.join(UPLOADS_DIR, unique_filename)
+
+        # Сохраняем файл
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+        # Проверяем, что файл действительно сохранился с правильным размером
+        if os.path.exists(file_path):
+            saved_size = os.path.getsize(file_path)
+            if saved_size != len(content):
+                print(f"⚠️ Размер сохранённого файла ({saved_size}) не совпадает с исходным ({len(content)})")
+                os.remove(file_path)  # Удаляем повреждённый файл
+                return JSONResponse(
+                    status_code=500,
+                    content={"status": "error", "message": "Ошибка сохранения файла"}
+                )
+
+            print(f"✓ Файл {unique_filename} успешно сохранён ({saved_size} байт)")
+
+            return JSONResponse(content={
+                "status": "success",
+                "filename": unique_filename,
+                "path": file_path,
+                "size": saved_size,
+                "original_name": file.filename
+            })
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={"status": "error", "message": "Файл не был сохранён"}
+            )
+
+    except Exception as e:
+        print(f"Ошибка загрузки файла: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": f"Ошибка загрузки файла: {str(e)}"}
+        )
 
 
 

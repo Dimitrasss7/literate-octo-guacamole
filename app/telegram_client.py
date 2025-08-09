@@ -609,142 +609,142 @@ class TelegramManager:
                 sent_message = None
                 try:
                     if file_path and os.path.exists(file_path):
-                        if schedule_date:
-                            print(f"Планирование отправки файла: {file_path}")
-                            
-                            # Определяем тип файла по расширению
-                            file_extension = os.path.splitext(file_path)[1].lower()
-                            
-                            # Определяем лучший метод отправки в зависимости от типа файла
-                            image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
-                            video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v']
-                            
-                            send_methods = []
-                            
-                            if file_extension in image_extensions:
-                                # Для изображений сначала пробуем send_photo
-                                send_methods = [
-                                    ('photo', client.send_photo, {'photo': file_path, 'caption': message, 'schedule_date': schedule_date}),
-                                    ('document', client.send_document, {'document': file_path, 'caption': message, 'schedule_date': schedule_date})
-                                ]
-                            elif file_extension in video_extensions:
-                                # Для видео сначала пробуем send_video
-                                send_methods = [
-                                    ('video', client.send_video, {'video': file_path, 'caption': message, 'schedule_date': schedule_date}),
-                                    ('document', client.send_document, {'document': file_path, 'caption': message, 'schedule_date': schedule_date})
-                                ]
-                            else:
-                                # Для всех остальных файлов (включая APK) используем только send_document
-                                send_methods = [
-                                    ('document', client.send_document, {'document': file_path, 'caption': message, 'schedule_date': schedule_date})
-                                ]
-                            
-                            # Пытаемся отправить файл всеми доступными методами
-                            last_error = None
-                            for method_name, method, kwargs in send_methods:
-                                try:
-                                    print(f"Попытка отправить файл как {method_name}")
-                                    sent_message = await method(chat_id=recipient, **kwargs)
-                                    print(f"✓ Файл успешно запланирован к отправке как {method_name} через Telegram на {schedule_date}")
-                                    break  # Успешно отправлено
-                                except Exception as method_error:
-                                    error_str = str(method_error)
-                                    print(f"Не удалось отправить как {method_name}: {error_str}")
-                                    last_error = method_error
-                                    
-                                    # Если это критическая ошибка, прекращаем попытки
-                                    if ("PEER_FLOOD" in error_str or 
-                                        "USER_IS_BLOCKED" in error_str or
-                                        "CHAT_WRITE_FORBIDDEN" in error_str):
-                                        raise method_error
-                            
-                            # Если все методы не сработали
-                            if not sent_message:
-                                print(f"Все методы отправки файла не сработали для {recipient}")
-                                # Отправляем только текст, если он есть
-                                if message:
-                                    try:
-                                        sent_message = await client.send_message(
-                                            chat_id=recipient,
-                                            text=f"{message}\n\n[Файл не удалось отправить из-за ограничений Telegram]",
-                                            schedule_date=schedule_date
-                                        )
-                                        print(f"✓ Отправлен только текст (файл пропущен) для {recipient}")
-                                    except Exception as text_error:
-                                        print(f"Не удалось отправить даже текст: {text_error}")
-                                        raise text_error
+                        # Проверяем размер файла
+                        file_size = os.path.getsize(file_path)
+                        print(f"Размер файла: {file_size} байт")
+                        
+                        if file_size == 0:
+                            print(f"⚠️ Файл {file_path} пустой (0 байт), пропускаем отправку файла")
+                            # Отправляем только текст
+                            if message:
+                                if schedule_date:
+                                    sent_message = await client.send_message(
+                                        chat_id=recipient,
+                                        text=f"{message}\n\n[Файл повреждён или пуст]",
+                                        schedule_date=schedule_date
+                                    )
                                 else:
-                                    # Если нет текста, поднимаем последнюю ошибку
-                                    raise last_error if last_error else Exception("Не удалось отправить файл")
+                                    sent_message = await client.send_message(
+                                        chat_id=recipient,
+                                        text=f"{message}\n\n[Файл повреждён или пуст]"
+                                    )
+                                print(f"✓ Отправлено только текстовое сообщение (файл пуст)")
+                            else:
+                                raise Exception("Файл пуст и нет текста для отправки")
+                        elif file_size > 50 * 1024 * 1024:  # 50MB лимит Telegram
+                            print(f"⚠️ Файл слишком большой: {file_size} байт (лимит 50MB)")
+                            # Отправляем только текст
+                            if message:
+                                if schedule_date:
+                                    sent_message = await client.send_message(
+                                        chat_id=recipient,
+                                        text=f"{message}\n\n[Файл слишком большой для отправки через Telegram]",
+                                        schedule_date=schedule_date
+                                    )
+                                else:
+                                    sent_message = await client.send_message(
+                                        chat_id=recipient,
+                                        text=f"{message}\n\n[Файл слишком большой для отправки через Telegram]"
+                                    )
+                                print(f"✓ Отправлено только текстовое сообщение (файл слишком большой)")
+                            else:
+                                raise Exception("Файл слишком большой и нет текста для отправки")
                         else:
-                            print(f"Отправка файла немедленно: {file_path}")
-                            
-                            # Определяем тип файла по расширению
+                            # Файл нормального размера, пытаемся отправить
                             file_extension = os.path.splitext(file_path)[1].lower()
+                            print(f"Отправка файла: {file_path} (расширение: {file_extension}, размер: {file_size} байт)")
                             
-                            # Определяем лучший метод отправки в зависимости от типа файла
+                            # Определяем методы отправки по типу файла
                             image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
                             video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v']
                             
-                            send_methods = []
-                            
                             if file_extension in image_extensions:
-                                # Для изображений сначала пробуем send_photo
+                                # Для изображений пробуем send_photo, потом send_document
                                 send_methods = [
-                                    ('photo', client.send_photo, {'photo': file_path, 'caption': message}),
-                                    ('document', client.send_document, {'document': file_path, 'caption': message})
+                                    ('photo', client.send_photo),
+                                    ('document', client.send_document)
                                 ]
                             elif file_extension in video_extensions:
-                                # Для видео сначала пробуем send_video
+                                # Для видео пробуем send_video, потом send_document
                                 send_methods = [
-                                    ('video', client.send_video, {'video': file_path, 'caption': message}),
-                                    ('document', client.send_document, {'document': file_path, 'caption': message})
+                                    ('video', client.send_video),
+                                    ('document', client.send_document)
                                 ]
                             else:
-                                # Для всех остальных файлов (включая APK) используем только send_document
+                                # Для APK и других файлов используем только send_document
                                 send_methods = [
-                                    ('document', client.send_document, {'document': file_path, 'caption': message})
+                                    ('document', client.send_document)
                                 ]
                             
-                            # Пытаемся отправить файл всеми доступными методами
+                            # Пытаемся отправить файл
+                            file_sent = False
                             last_error = None
-                            for method_name, method, kwargs in send_methods:
+                            
+                            for method_name, method in send_methods:
                                 try:
                                     print(f"Попытка отправить файл как {method_name}")
+                                    
+                                    # Готовим параметры для отправки
+                                    if method_name == 'photo':
+                                        kwargs = {'photo': file_path, 'caption': message}
+                                    elif method_name == 'video':
+                                        kwargs = {'video': file_path, 'caption': message}
+                                    else:  # document
+                                        kwargs = {'document': file_path, 'caption': message}
+                                    
+                                    # Добавляем schedule_date если нужно
+                                    if schedule_date:
+                                        kwargs['schedule_date'] = schedule_date
+                                    
+                                    # Отправляем файл
                                     sent_message = await method(chat_id=recipient, **kwargs)
-                                    print(f"✓ Файл успешно отправлен как {method_name} немедленно")
+                                    
+                                    if schedule_date:
+                                        print(f"✓ Файл успешно запланирован к отправке как {method_name} через Telegram на {schedule_date}")
+                                    else:
+                                        print(f"✓ Файл успешно отправлен как {method_name}")
+                                    
+                                    file_sent = True
                                     break  # Успешно отправлено
+                                    
                                 except Exception as method_error:
                                     error_str = str(method_error)
                                     print(f"Не удалось отправить как {method_name}: {error_str}")
                                     last_error = method_error
                                     
-                                    # Если это критическая ошибка, прекращаем попытки
-                                    if ("PEER_FLOOD" in error_str or 
-                                        "USER_IS_BLOCKED" in error_str or
-                                        "CHAT_WRITE_FORBIDDEN" in error_str):
+                                    # Проверяем критические ошибки
+                                    if any(err in error_str for err in ["PEER_FLOOD", "USER_IS_BLOCKED", "CHAT_WRITE_FORBIDDEN", "USER_INVALID", "PEER_ID_INVALID"]):
+                                        print(f"Критическая ошибка: {error_str}")
                                         raise method_error
                             
-                            # Если все методы не сработали
-                            if not sent_message:
-                                print(f"Все методы отправки файла не сработали для {recipient}")
-                                # Отправляем только текст, если он есть
+                            # Если файл не удалось отправить ни одним способом
+                            if not file_sent:
+                                print(f"⚠️ Не удалось отправить файл {recipient} ни одним способом")
+                                
+                                # Отправляем только текст если есть
                                 if message:
                                     try:
-                                        sent_message = await client.send_message(
-                                            chat_id=recipient,
-                                            text=f"{message}\n\n[Файл не удалось отправить из-за ограничений Telegram]"
-                                        )
+                                        if schedule_date:
+                                            sent_message = await client.send_message(
+                                                chat_id=recipient,
+                                                text=f"{message}\n\n[Файл не удалось отправить - {str(last_error)[:100]}]",
+                                                schedule_date=schedule_date
+                                            )
+                                        else:
+                                            sent_message = await client.send_message(
+                                                chat_id=recipient,
+                                                text=f"{message}\n\n[Файл не удалось отправить - {str(last_error)[:100]}]"
+                                            )
                                         print(f"✓ Отправлен только текст (файл пропущен) для {recipient}")
                                     except Exception as text_error:
                                         print(f"Не удалось отправить даже текст: {text_error}")
                                         raise text_error
                                 else:
-                                    # Если нет текста, поднимаем последнюю ошибку
+                                    # Если нет текста, поднимаем ошибку
                                     raise last_error if last_error else Exception("Не удалось отправить файл")
                     else:
+                        # Отправляем только текстовое сообщение
                         if schedule_date:
-                            # Отправляем только текст через планировщик
                             sent_message = await client.send_message(
                                 chat_id=recipient,
                                 text=message,
@@ -752,7 +752,6 @@ class TelegramManager:
                             )
                             print(f"✓ Текстовое сообщение успешно запланировано через Telegram на {schedule_date}")
                         else:
-                            # Отправляем текст немедленно
                             sent_message = await client.send_message(
                                 chat_id=recipient,
                                 text=message

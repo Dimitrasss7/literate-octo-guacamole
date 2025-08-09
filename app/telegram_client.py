@@ -266,15 +266,24 @@ class TelegramManager:
         }
 
     async def get_client(self, account_id: int) -> Optional[Client]:
-        """Получение клиента для аккаунта"""
+        """Получение клиента для аккаунта с улучшенным кэшированием"""
         if account_id in self.clients:
             client = self.clients[account_id]
             try:
-                # Проверяем, что клиент все еще подключен
-                await client.get_me()
-                return client
+                # Быстрая проверка подключения без полного запроса
+                if client.is_connected:
+                    return client
+                else:
+                    # Пробуем переподключиться
+                    await client.start()
+                    return client
             except:
                 # Если клиент не работает, удаляем его
+                print(f"Removing failed client for account {account_id}")
+                try:
+                    await client.stop()
+                except:
+                    pass
                 del self.clients[account_id]
 
         db = next(get_db())
@@ -366,7 +375,8 @@ class TelegramManager:
                 api_hash=API_HASH,
                 proxy=self._parse_proxy(account.proxy) if account.proxy else None,
                 sleep_threshold=60,
-                in_memory=True  # Используем in-memory storage чтобы избежать проблем с readonly database
+                in_memory=True,  # Используем in-memory storage чтобы избежать проблем с readonly database
+                no_updates=True  # Отключаем получение обновлений для ускорения
             )
 
             try:
@@ -444,7 +454,7 @@ class TelegramManager:
             db.close()
 
     async def get_user_contacts(self, account_id: int) -> Dict:
-        """Получение всех контактов пользователя"""
+        """Получение всех контактов пользователя (оптимизированная версия)"""
         try:
             client = await self.get_client(account_id)
             if not client:
@@ -453,12 +463,54 @@ class TelegramManager:
             contacts = []
             
             try:
-                print(f"Getting all dialogs for account {account_id}")
+                print(f"Getting contacts for account {account_id} (fast method)")
                 
-                # Получаем все диалоги и фильтруем приватные чаты (контакты)
+                # Сначала пробуем быстрый метод - прямой API контактов
+                try:
+                    contacts_api = await client.get_contacts()
+                    print(f"Got {len(contacts_api) if contacts_api else 0} contacts from API")
+                    
+                    if contacts_api:
+                        for contact in contacts_api:
+                            try:
+                                contact_info = {
+                                    "id": contact.id,
+                                    "username": getattr(contact, 'username', None),
+                                    "first_name": getattr(contact, 'first_name', None),
+                                    "last_name": getattr(contact, 'last_name', None),
+                                    "phone": getattr(contact, 'phone_number', None),
+                                    "display_name": ""
+                                }
+                                
+                                # Формируем отображаемое имя
+                                if contact_info["first_name"]:
+                                    contact_info["display_name"] = contact_info["first_name"]
+                                    if contact_info["last_name"]:
+                                        contact_info["display_name"] += f" {contact_info['last_name']}"
+                                elif contact_info["username"]:
+                                    contact_info["display_name"] = f"@{contact_info['username']}"
+                                else:
+                                    contact_info["display_name"] = f"User {contact_info['id']}"
+                                
+                                contacts.append(contact_info)
+                            except Exception as contact_error:
+                                print(f"Error processing contact: {contact_error}")
+                                continue
+                        
+                        print(f"Processed {len(contacts)} contacts from API")
+                        return {"status": "success", "contacts": contacts}
+                
+                except Exception as api_error:
+                    print(f"API contacts method failed: {api_error}")
+                
+                # Если API не сработал, используем диалоги, но с меньшим лимитом
+                print(f"Fallback to dialogs method for account {account_id}")
                 dialog_count = 0
-                async for dialog in client.get_dialogs(limit=200):
+                async for dialog in client.get_dialogs(limit=50):  # Уменьшили лимит для скорости
                     try:
+                        if dialog_count >= 50:  # Ограничиваем количество обрабатываемых диалогов
+                            break
+                            
                         # Только приватные чаты (не боты, не сохраненные сообщения)
                         if (dialog.chat.type == "private" and 
                             not dialog.chat.is_self and 
@@ -485,52 +537,14 @@ class TelegramManager:
                                 contact_info["display_name"] = f"User {contact_info['id']}"
                             
                             contacts.append(contact_info)
-                            dialog_count += 1
+                        
+                        dialog_count += 1
                             
                     except Exception as dialog_error:
                         print(f"Error processing dialog {dialog_count}: {dialog_error}")
                         continue
-                        
-                print(f"Found {dialog_count} private contacts for account {account_id}")
-                
-                # Дополнительно пробуем получить контакты через API
-                try:
-                    contacts_api = await client.get_contacts()
-                    print(f"Additional contacts from API: {len(contacts_api) if contacts_api else 0}")
-                    
-                    if contacts_api:
-                        for contact in contacts_api:
-                            try:
-                                # Проверяем, не добавили ли уже этот контакт
-                                already_added = any(c['id'] == contact.id for c in contacts)
-                                if not already_added:
-                                    contact_info = {
-                                        "id": contact.id,
-                                        "username": getattr(contact, 'username', None),
-                                        "first_name": getattr(contact, 'first_name', None),
-                                        "last_name": getattr(contact, 'last_name', None),
-                                        "phone": getattr(contact, 'phone_number', None),
-                                        "display_name": ""
-                                    }
-                                    
-                                    # Формируем отображаемое имя
-                                    if contact_info["first_name"]:
-                                        contact_info["display_name"] = contact_info["first_name"]
-                                        if contact_info["last_name"]:
-                                            contact_info["display_name"] += f" {contact_info['last_name']}"
-                                    elif contact_info["username"]:
-                                        contact_info["display_name"] = f"@{contact_info['username']}"
-                                    else:
-                                        contact_info["display_name"] = f"User {contact_info['id']}"
-                                    
-                                    contacts.append(contact_info)
-                            except Exception as contact_error:
-                                print(f"Error processing API contact: {contact_error}")
-                                continue
-                except Exception as api_error:
-                    print(f"Error getting contacts from API: {api_error}")
 
-                print(f"Total contacts found for account {account_id}: {len(contacts)}")
+                print(f"Found {len(contacts)} contacts from dialogs for account {account_id}")
                 return {"status": "success", "contacts": contacts}
                 
             except Exception as method_error:

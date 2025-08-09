@@ -132,6 +132,7 @@ async def new_campaign_page(request: Request):
     })
 
 @app.post("/campaigns")
+@app.post("/campaigns/new")
 async def create_campaign(
     name: str = Form(...),
     channel_message: str = Form(""),

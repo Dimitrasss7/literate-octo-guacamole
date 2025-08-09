@@ -1,4 +1,3 @@
-
 {% extends "base.html" %}
 
 {% block title %}Автоматическая рассылка{% endblock %}
@@ -6,7 +5,7 @@
 {% block content %}
 <div class="container">
     <h2>Автоматическая рассылка</h2>
-    
+
     <div class="card">
         <div class="card-header">
             <h5>Создать автоматическую рассылку</h5>
@@ -19,7 +18,7 @@
                         <option value="">Выберите аккаунт</option>
                     </select>
                 </div>
-                
+
                 <div class="mb-3">
                     <label for="target_types" class="form-label">Типы получателей</label>
                     <div>
@@ -43,17 +42,17 @@
                         </div>
                     </div>
                 </div>
-                
+
                 <div class="mb-3">
                     <label for="delay_seconds" class="form-label">Задержка между сообщениями (секунды)</label>
                     <input type="number" class="form-control" id="delay_seconds" name="delay_seconds" value="5" min="1" max="300">
                 </div>
-                
+
                 <div class="mb-3">
                     <label for="message" class="form-label">Сообщение</label>
                     <textarea class="form-control" id="message" name="message" rows="5" required placeholder="Введите текст сообщения..."></textarea>
                 </div>
-                
+
                 <div class="row">
                     <div class="col-md-6">
                         <button type="button" class="btn btn-primary" onclick="createAutoCampaign()">Создать кампанию</button>
@@ -65,13 +64,17 @@
             </form>
         </div>
     </div>
-    
+
     <div class="mt-4">
-        <h5>Предварительный просмотр получателей</h5>
-        <div id="previewArea" class="card">
-            <div class="card-body">
-                <p class="text-muted">Выберите аккаунт для предварительного просмотра списка получателей</p>
-            </div>
+        <h4>Предварительный просмотр получателей</h4>
+        <div id="previewContent">
+            <p class="text-muted">Выберите аккаунт для просмотра контактов</p>
+        </div>
+        <div id="contactsStats" class="mt-2" style="display:none;">
+            <small class="text-info">
+                <i class="fas fa-info-circle"></i> 
+                <span id="statsText">Загружается...</span>
+            </small>
         </div>
     </div>
 </div>
@@ -89,10 +92,10 @@ async function loadAccounts() {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const accounts = await response.json();
-        
+
         const select = document.getElementById('account_id');
         select.innerHTML = '<option value="">Выберите аккаунт</option>';
-        
+
         if (Array.isArray(accounts)) {
             accounts.forEach(account => {
                 if (account.is_active) {
@@ -114,106 +117,169 @@ async function loadAccounts() {
 // Обновление превью при выборе аккаунта
 document.getElementById('account_id').addEventListener('change', function() {
     if (this.value) {
-        loadPreview(this.value);
+        displayPreview(this.value);
     } else {
-        document.getElementById('previewArea').innerHTML = 
-            '<div class="card-body"><p class="text-muted">Выберите аккаунт для предварительного просмотра списка получателей</p></div>';
+        document.getElementById('previewContent').innerHTML = 
+            '<p class="text-muted">Выберите аккаунт для просмотра контактов</p>';
+        document.getElementById('contactsStats').style.display = 'none';
     }
 });
 
-async function loadPreview(accountId) {
-    try {
-        console.log('Загружаем данные для аккаунта:', accountId);
-        
-        // Загружаем контакты и чаты параллельно
-        const [contactsResponse, chatsResponse] = await Promise.all([
-            fetch(`/api/accounts/${accountId}/contacts`),
-            fetch(`/api/accounts/${accountId}/chats`)
-        ]);
-        
-        console.log('Ответы получены. Статусы:', {
-            contacts: contactsResponse.status,
-            chats: chatsResponse.status
-        });
-        
-        const contactsResult = await contactsResponse.json();
-        const chatsResult = await chatsResponse.json();
-        
-        console.log('Данные контактов:', contactsResult);
-        console.log('Данные чатов:', chatsResult);
-        
-        let html = '<div class="card-body">';
-        
-        // Показываем приватные контакты
-        if (contactsResult.status === 'success' && contactsResult.contacts && contactsResult.contacts.length > 0) {
-            html += `<h6>Приватные контакты (${contactsResult.contacts.length})</h6>`;
-            html += '<ul class="list-unstyled">';
-            contactsResult.contacts.slice(0, 10).forEach(contact => {
-                const name = contact.first_name || contact.last_name ? 
-                    `${contact.first_name || ''} ${contact.last_name || ''}`.trim() : 
-                    'Без имени';
-                html += `<li>• ${name} ${contact.username ? '@' + contact.username : ''} ${contact.phone ? '(' + contact.phone + ')' : ''}</li>`;
-            });
-            if (contactsResult.contacts.length > 10) {
-                html += `<li>... и еще ${contactsResult.contacts.length - 10}</li>`;
-            }
-            html += '</ul>';
-        }
-        
-        // Показываем чаты если они есть
-        if (chatsResult.status === 'success' && chatsResult.chats) {
-            const chats = chatsResult.chats;
-            
-            if (chats.private && chats.private.length > 0) {
-                html += `<h6>Приватные чаты (${chats.private.length})</h6>`;
-                html += '<ul class="list-unstyled">';
-                chats.private.slice(0, 10).forEach(chat => {
-                    html += `<li>• ${chat.title || 'Без имени'} ${chat.username ? '@' + chat.username : ''}</li>`;
+function displayPreview(accountId) {
+                console.log("Загружаем данные для аккаунта:", accountId);
+
+                const previewContent = document.getElementById('previewContent');
+                const statsDiv = document.getElementById('contactsStats');
+
+                previewContent.innerHTML = '<div class="text-center"><i class="fas fa-spinner fa-spin"></i> Загружается...</div>';
+                statsDiv.style.display = 'none';
+
+                Promise.all([
+                    fetch(`/api/contacts/${accountId}`),
+                    fetch(`/api/chats/${accountId}`)
+                ])
+                .then(responses => {
+                    console.log("Ответы получены. Статусы:", {
+                        contacts: responses[0].status,
+                        chats: responses[1].status
+                    });
+                    return Promise.all([
+                        responses[0].json(),
+                        responses[1].json()
+                    ]);
+                })
+                .then(([contactsData, chatsData]) => {
+                    console.log("Данные контактов:", contactsData);
+                    console.log("Данные чатов:", chatsData);
+
+                    let html = '';
+                    let totalCount = 0;
+                    let contactsCount = 0;
+                    let groupsCount = 0;
+                    let channelsCount = 0;
+
+                    // Контакты
+                    if (contactsData.status === 'success' && contactsData.contacts && contactsData.contacts.length > 0) {
+                        contactsCount = contactsData.contacts.length;
+                        html += `<h5><i class="fas fa-user-friends text-primary"></i> Личные контакты (${contactsCount}):</h5>`;
+                        html += '<div class="contacts-container" style="max-height: 300px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 0.25rem; padding: 10px;">';
+
+                        contactsData.contacts.forEach((contact, index) => {
+                            let displayText = contact.display_name || `User ${contact.id}`;
+                            let additionalInfo = [];
+
+                            if (contact.username) {
+                                additionalInfo.push(`@${contact.username}`);
+                            }
+                            if (contact.phone) {
+                                additionalInfo.push(contact.phone);
+                            }
+
+                            let badge = '';
+                            if (contact.username) {
+                                badge = '<span class="badge badge-primary">@</span> ';
+                            }
+
+                            let infoText = additionalInfo.length > 0 ? ` (${additionalInfo.join(', ')})` : '';
+
+                            html += `<div class="contact-item mb-1 p-2 border-bottom">
+                                        <div class="d-flex align-items-center">
+                                            <span class="contact-number mr-2 text-muted" style="font-size: 0.8em;">${index + 1}.</span>
+                                            ${badge}
+                                            <strong>${displayText}</strong>
+                                            <small class="text-muted ml-2">${infoText}</small>
+                                        </div>
+                                     </div>`;
+                        });
+                        html += '</div>';
+                        totalCount += contactsCount;
+                    } else if (contactsData.status === 'error') {
+                        html += `<div class="alert alert-warning">
+                                    <i class="fas fa-exclamation-triangle"></i> 
+                                    Контакты: ${contactsData.message}
+                                 </div>`;
+                    }
+
+                    // Чаты
+                    if (chatsData.status === 'success' && chatsData.chats) {
+                        // Группы
+                        if (chatsData.chats.groups && chatsData.chats.groups.length > 0) {
+                            groupsCount = chatsData.chats.groups.length;
+                            html += `<h5 class="mt-3"><i class="fas fa-users text-success"></i> Группы (${groupsCount}):</h5>`;
+                            html += '<ul class="list-group mb-3">';
+                            chatsData.chats.groups.slice(0, 15).forEach((group, index) => {
+                                let title = group.title || `Group ${group.id}`;
+                                let username = group.username ? ` (@${group.username})` : '';
+                                html += `<li class="list-group-item d-flex justify-content-between align-items-center">
+                                           <span>${index + 1}. ${title}${username}</span>
+                                           <span class="badge badge-success">Группа</span>
+                                         </li>`;
+                            });
+                            if (chatsData.chats.groups.length > 15) {
+                                html += `<li class="list-group-item text-center text-muted">
+                                           ... и еще ${chatsData.chats.groups.length - 15} групп
+                                         </li>`;
+                            }
+                            html += '</ul>';
+                            totalCount += groupsCount;
+                        }
+
+                        // Каналы
+                        if (chatsData.chats.channels && chatsData.chats.channels.length > 0) {
+                            channelsCount = chatsData.chats.channels.length;
+                            html += `<h5><i class="fas fa-broadcast-tower text-info"></i> Каналы (${channelsCount}):</h5>`;
+                            html += '<ul class="list-group mb-3">';
+                            chatsData.chats.channels.slice(0, 10).forEach((channel, index) => {
+                                let title = channel.title || `Channel ${channel.id}`;
+                                let username = channel.username ? ` (@${channel.username})` : '';
+                                html += `<li class="list-group-item d-flex justify-content-between align-items-center">
+                                           <span>${index + 1}. ${title}${username}</span>
+                                           <span class="badge badge-info">Канал</span>
+                                         </li>`;
+                            });
+                            if (chatsData.chats.channels.length > 10) {
+                                html += `<li class="list-group-item text-center text-muted">
+                                           ... и еще ${chatsData.chats.channels.length - 10} каналов
+                                         </li>`;
+                            }
+                            html += '</ul>';
+                            totalCount += channelsCount;
+                        }
+                    } else if (chatsData.status === 'error') {
+                        html += `<div class="alert alert-warning mt-2">
+                                    <i class="fas fa-exclamation-triangle"></i> 
+                                    Чаты: ${chatsData.message}
+                                 </div>`;
+                    }
+
+                    // Показываем статистику
+                    if (totalCount > 0) {
+                        const statsText = `Найдено получателей: ${totalCount} (контакты: ${contactsCount}, группы: ${groupsCount}, каналы: ${channelsCount})`;
+                        document.getElementById('statsText').textContent = statsText;
+                        statsDiv.style.display = 'block';
+
+                        html = `<div class="alert alert-success mb-3">
+                                   <i class="fas fa-check-circle"></i> 
+                                   <strong>Готово к рассылке!</strong> Найдено получателей: ${totalCount}
+                               </div>` + html;
+                    } else {
+                        html = `<div class="alert alert-warning">
+                                   <i class="fas fa-exclamation-circle"></i> 
+                                   <strong>Получатели не найдены</strong><br>
+                                   Возможные причины: аккаунт заблокирован, нет диалогов, или проблемы с подключением
+                               </div>`;
+                    }
+
+                    previewContent.innerHTML = html;
+                })
+                .catch(error => {
+                    console.error("Ошибка загрузки превью:", error);
+                    previewContent.innerHTML = `<div class="alert alert-danger">
+                                                   <i class="fas fa-times-circle"></i> 
+                                                   Ошибка загрузки данных: ${error.message}
+                                               </div>`;
                 });
-                if (chats.private.length > 10) {
-                    html += `<li>... и еще ${chats.private.length - 10}</li>`;
-                }
-                html += '</ul>';
             }
-            
-            if (chats.groups && chats.groups.length > 0) {
-                html += `<h6>Группы (${chats.groups.length})</h6>`;
-                html += '<ul class="list-unstyled">';
-                chats.groups.slice(0, 10).forEach(chat => {
-                    html += `<li>• ${chat.title} ${chat.username ? '@' + chat.username : ''}</li>`;
-                });
-                if (chats.groups.length > 10) {
-                    html += `<li>... и еще ${chats.groups.length - 10}</li>`;
-                }
-                html += '</ul>';
-            }
-            
-            if (chats.channels && chats.channels.length > 0) {
-                html += `<h6>Каналы (${chats.channels.length})</h6>`;
-                html += '<ul class="list-unstyled">';
-                chats.channels.slice(0, 10).forEach(chat => {
-                    html += `<li>• ${chat.title} ${chat.username ? '@' + chat.username : ''}</li>`;
-                });
-                if (chats.channels.length > 10) {
-                    html += `<li>... и еще ${chats.channels.length - 10}</li>`;
-                }
-                html += '</ul>';
-            }
-        }
-        
-        if (html === '<div class="card-body">') {
-            html += '<p class="text-muted">Контакты и чаты не найдены или аккаунт недоступен</p>';
-        }
-        
-        html += '</div>';
-        document.getElementById('previewArea').innerHTML = html;
-        
-    } catch (error) {
-        console.error('Ошибка загрузки превью:', error);
-        document.getElementById('previewArea').innerHTML = 
-            '<div class="card-body"><p class="text-danger">Ошибка загрузки данных</p></div>';
-    }
-}
 
 function getSelectedTargetTypes() {
     const types = [];
@@ -230,17 +296,17 @@ async function createAutoCampaign() {
         delay_seconds: parseInt(document.getElementById('delay_seconds').value),
         target_types: getSelectedTargetTypes()
     };
-    
+
     if (!formData.account_id || !formData.message) {
         alert('Пожалуйста, заполните все обязательные поля');
         return;
     }
-    
+
     if (formData.target_types.length === 0) {
         alert('Выберите хотя бы один тип получателей');
         return;
     }
-    
+
     try {
         const response = await fetch('/api/auto-campaign', {
             method: 'POST',
@@ -249,9 +315,9 @@ async function createAutoCampaign() {
             },
             body: JSON.stringify(formData)
         });
-        
+
         const result = await response.json();
-        
+
         if (result.status === 'success') {
             alert(`Кампания создана успешно! ID: ${result.campaign_id}, Получателей: ${result.recipients_count}`);
             window.location.href = '/campaigns';
@@ -271,21 +337,21 @@ async function startAutoCampaign() {
         delay_seconds: parseInt(document.getElementById('delay_seconds').value),
         target_types: getSelectedTargetTypes()
     };
-    
+
     if (!formData.account_id || !formData.message) {
         alert('Пожалуйста, заполните все обязательные поля');
         return;
     }
-    
+
     if (formData.target_types.length === 0) {
         alert('Выберите хотя бы один тип получателей');
         return;
     }
-    
+
     if (!confirm('Запустить автоматическую рассылку? Это действие нельзя будет отменить.')) {
         return;
     }
-    
+
     try {
         const response = await fetch('/api/auto-campaign/start', {
             method: 'POST',
@@ -294,9 +360,9 @@ async function startAutoCampaign() {
             },
             body: JSON.stringify(formData)
         });
-        
+
         const result = await response.json();
-        
+
         if (result.status === 'success') {
             alert(`Автоматическая рассылка запущена! ID: ${result.campaign_id}, Получателей: ${result.recipients_count}`);
             window.location.href = '/campaigns';

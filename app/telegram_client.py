@@ -361,16 +361,21 @@ class TelegramManager:
                 contacts = await client.get_contacts()
 
                 for contact in contacts:
+                    # Безопасное получение атрибутов
+                    first_name = getattr(contact, 'first_name', '') or ""
+                    last_name = getattr(contact, 'last_name', '') or ""
+                    username = getattr(contact, 'username', '') or ""
+                    
                     contact_data = {
                         "id": contact.id,
-                        "first_name": contact.first_name or "",
-                        "last_name": contact.last_name or "",
-                        "username": contact.username or "",
+                        "first_name": first_name,
+                        "last_name": last_name,
+                        "username": username,
                         "phone": getattr(contact, 'phone_number', '') or "",
-                        "is_bot": contact.is_bot if hasattr(contact, 'is_bot') else False,
-                        "is_verified": contact.is_verified if hasattr(contact, 'is_verified') else False,
-                        "is_premium": contact.is_premium if hasattr(contact, 'is_premium') else False,
-                        "display_name": f"{contact.first_name or ''} {contact.last_name or ''}".strip() or contact.username or f"User {contact.id}"
+                        "is_bot": getattr(contact, 'is_bot', False),
+                        "is_verified": getattr(contact, 'is_verified', False),
+                        "is_premium": getattr(contact, 'is_premium', False),
+                        "display_name": f"{first_name} {last_name}".strip() or username or f"User {contact.id}"
                     }
                     contacts_list.append(contact_data)
 
@@ -589,12 +594,21 @@ class TelegramManager:
 
                 # Безопасное получение chat_id
                 chat_id = None
-                if hasattr(sent_message, 'chat') and sent_message.chat:
+                if hasattr(sent_message, 'chat') and sent_message.chat is not None:
                     chat_id = getattr(sent_message.chat, 'id', None)
+                elif hasattr(sent_message, 'peer_id'):
+                    # Если chat не доступен, используем peer_id
+                    peer_id = sent_message.peer_id
+                    if hasattr(peer_id, 'user_id'):
+                        chat_id = peer_id.user_id
+                    elif hasattr(peer_id, 'chat_id'):
+                        chat_id = peer_id.chat_id
+                    elif hasattr(peer_id, 'channel_id'):
+                        chat_id = peer_id.channel_id
 
                 return {
                     "status": "success",
-                    "message_id": sent_message.id,
+                    "message_id": sent_message.id if hasattr(sent_message, 'id') else None,
                     "chat_id": chat_id
                 }
 

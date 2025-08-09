@@ -358,7 +358,9 @@ class TelegramManager:
 
                 # Получаем контакты через Pyrogram
                 contacts_list = []
-                async for contact in client.get_contacts():
+                contacts = await client.get_contacts()
+                
+                for contact in contacts:
                     contact_data = {
                         "id": contact.id,
                         "first_name": contact.first_name or "",
@@ -368,6 +370,7 @@ class TelegramManager:
                         "is_bot": contact.is_bot if hasattr(contact, 'is_bot') else False,
                         "is_verified": contact.is_verified if hasattr(contact, 'is_verified') else False,
                         "is_premium": contact.is_premium if hasattr(contact, 'is_premium') else False,
+                        "display_name": f"{contact.first_name or ''} {contact.last_name or ''}".strip() or contact.username or f"User {contact.id}"
                     }
                     contacts_list.append(contact_data)
 

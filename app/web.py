@@ -93,13 +93,6 @@ async def verify_code(
         if result is None:
             result = {"status": "error", "message": "Внутренняя ошибка сервера"}
 
-        # Если код истек, автоматически отправляем новый
-        if result.get("status") == "code_expired":
-            new_code_result = await telegram_manager.add_account(phone, proxy)
-            if new_code_result and new_code_result.get("status") == "code_required":
-                result["new_phone_code_hash"] = new_code_result["phone_code_hash"]
-                result["message"] = "Код истек. Новый код отправлен на ваш номер."
-
         return JSONResponse(result)
 
     except Exception as e:

@@ -40,15 +40,16 @@ class TelegramManager:
             session_name = f"session_{phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')}"
             session_path = os.path.join(SESSIONS_DIR, session_name)
 
-            # Создаем клиент с теми же настройками
+            # Создаем клиент с настройками для избежания проблем с базой данных
             client = Client(
                 session_path,
                 api_id=API_ID,
                 api_hash=API_HASH,
                 phone_number=phone,
                 proxy=self._parse_proxy(proxy) if proxy else None,
-                sleep_threshold=60,  # Увеличиваем время ожидания
-                max_concurrent_transmissions=1
+                sleep_threshold=60,
+                max_concurrent_transmissions=1,
+                in_memory=True  # Используем in-memory storage
             )
 
             # Подключаемся и авторизуемся
@@ -82,82 +83,60 @@ class TelegramManager:
     async def verify_code(self, phone: str, code: str, phone_code_hash: str, session_name: str, proxy: Optional[str] = None):
         """Подтверждение кода из SMS"""
         try:
-            proxy_dict = None
-            if proxy:
-                proxy_parts = proxy.split(':')
-                if len(proxy_parts) >= 4:
-                    proxy_dict = {
-                        'proxy_type': 'socks5',
-                        'addr': proxy_parts[0],
-                        'port': int(proxy_parts[1]),
-                        'username': proxy_parts[2],
-                        'password': proxy_parts[3]
-                    }
-
-            client = TelegramClient(
-                session_name,
-                API_ID, # Use API_ID from config
-                API_HASH, # Use API_HASH from config
-                proxy=proxy_dict if proxy else None
-            )
-
-            await client.connect()
-
-            # Проверяем код
-            signed_in = await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
-
-            if signed_in:
-                # Проверяем, требуется ли 2FA
-                if hasattr(signed_in, 'password'):
-                    await client.disconnect()
-                    return {
-                        "status": "password_required", 
-                        "message": "Требуется пароль двухфакторной аутентификации",
-                        "session_name": session_name
-                    }
-
-                # Успешная авторизация
-                await client.disconnect()
-
-                # Сохраняем аккаунт в базе данных
-                # Calling the correct method: _save_account
+            # Используем существующий клиент если есть
+            client = self.pending_clients.get(session_name)
+            
+            if not client:
+                # Создаем новый клиент если нет существующего
                 session_path = os.path.join(SESSIONS_DIR, session_name)
-                await self._save_account(phone, session_path, signed_in.user.first_name, proxy)
+                client = Client(
+                    session_path,
+                    api_id=API_ID,
+                    api_hash=API_HASH,
+                    phone_number=phone,
+                    proxy=self._parse_proxy(proxy) if proxy else None
+                )
+                await client.connect()
 
-                return {"status": "success", "name": signed_in.user.first_name}
-            else:
-                await client.disconnect()
-                return {"status": "error", "message": "Неверный код"}
+            # Подтверждаем код
+            await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
 
-        except PhoneCodeInvalidError:
-            return {"status": "error", "message": "Неверный код подтверждения"}
-        except PhoneCodeExpiredError:
-            return {"status": "code_expired", "message": "Код истёк. Запросите новый код"}
-        except PhoneCodeEmptyError:
-            return {"status": "error", "message": "Пустой код подтверждения"}
-        except SessionPasswordNeededError:
-            return {
-                "status": "password_required", 
-                "message": "Требуется пароль двухфакторной аутентификации",
-                "session_name": session_name
-            }
-        except FloodWaitError as e:
-            return {"status": "error", "message": f"Слишком много попыток. Подождите {e.seconds} секунд"}
-        except PhoneNumberInvalidError:
-            return {"status": "error", "message": "Неверный номер телефона"}
+            # Получаем информацию о пользователе
+            me = await client.get_me()
+            
+            # Сохраняем аккаунт
+            session_path = os.path.join(SESSIONS_DIR, session_name)
+            await self._save_account(phone, session_path, me.first_name, proxy)
+            
+            await client.disconnect()
+
+            # Удаляем из pending_clients
+            if session_name in self.pending_clients:
+                del self.pending_clients[session_name]
+
+            return {"status": "success", "name": me.first_name}
+
         except Exception as e:
-            error_msg = str(e)
-            print(f"Ошибка при верификации кода: {error_msg}")
+            error_msg = str(e).lower()
+            print(f"Ошибка при верификации кода: {str(e)}")
 
-            # Логируем подробную ошибку
-            with open("unknown_errors.txt", "a", encoding="utf-8") as f:
-                f.write(f"Verify code error: {error_msg}\n")
-                f.write(f"Phone: {phone}\n")
-                f.write(f"Code: {code[:2]}***\n")
-                f.write(f"Exception type: {type(e).__name__}\n")
-                f.write("---\n")
-
-            return {"status": "error", "message": f"Ошибка при подтверждении кода: {error_msg}"}
+            # Обработка различных типов ошибок
+            if "phone_code_invalid" in error_msg or "invalid code" in error_msg:
+                return {"status": "error", "message": "Неверный код подтверждения"}
+            elif "phone_code_expired" in error_msg or "expired" in error_msg:
+                return {"status": "error", "message": "Код истёк. Запросите новый код через форму добавления аккаунта"}
+            elif "phone_code_empty" in error_msg or "empty" in error_msg:
+                return {"status": "error", "message": "Код не может быть пустым"}
+            elif "password" in error_msg or "2fa" in error_msg:
+                return {
+                    "status": "password_required", 
+                    "message": "Требуется пароль двухфакторной аутентификации",
+                    "session_name": session_name
+                }
+            elif "flood" in error_msg:
+                return {"status": "error", "message": "Слишком много попыток. Попробуйте позже"}
+            else:
+                return {"status": "error", "message": f"Ошибка при подтверждении: {str(e)}"}
 
 
     async def verify_password(self, phone: str, password: str, session_name: str, proxy: Optional[str] = None) -> Dict:
@@ -380,13 +359,14 @@ class TelegramManager:
                 else:
                     raise Exception(f"Не удалось найти файл сессии для аккаунта {account_id}")
 
-            # Создаем клиент
+            # Создаем клиент с настройками для избежания ошибки readonly database
             client = Client(
                 session_path,
                 api_id=API_ID,
                 api_hash=API_HASH,
                 proxy=self._parse_proxy(account.proxy) if account.proxy else None,
-                sleep_threshold=60
+                sleep_threshold=60,
+                in_memory=True  # Используем in-memory storage чтобы избежать проблем с readonly database
             )
 
             try:

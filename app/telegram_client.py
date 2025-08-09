@@ -346,51 +346,85 @@ class TelegramManager:
             db.close()
 
     async def get_user_contacts(self, account_id: int) -> Dict:
-        """Получение всех контактов пользователя - полностью новая реализация"""
+        """Получение всех контактов пользователя - улучшенная версия с более детальной отладкой"""
         try:
             print(f"=== Начинаем получение контактов для аккаунта {account_id} ===")
+            
+            db = next(get_db())
+            account = db.query(Account).filter(Account.id == account_id).first()
+            if not account:
+                print(f"Аккаунт {account_id} не найден в базе данных")
+                return {"status": "error", "message": "Аккаунт не найден"}
+            
+            print(f"Аккаунт найден: {account.name} ({account.phone}), статус: {account.status}")
+            db.close()
             
             client = await self.get_client(account_id)
             if not client:
                 print(f"Не удалось получить клиент для аккаунта {account_id}")
                 return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
 
+            print(f"Клиент получен успешно, подключен: {client.is_connected}")
+
             contacts = []
             
             try:
+                print("Пробуем получить информацию о себе...")
+                me = await client.get_me()
+                print(f"Текущий пользователь: {me.first_name} (ID: {me.id})")
+                
                 print("Получаем список всех диалогов...")
                 
-                # Получаем все диалоги без лимита 
+                # Получаем все диалоги
                 dialogs_list = []
+                dialog_count = 0
                 async for dialog in client.get_dialogs():
+                    dialog_count += 1
                     dialogs_list.append(dialog)
+                    
+                    if dialog_count % 10 == 0:
+                        print(f"Загружено {dialog_count} диалогов...")
+                    
                     # Ограничиваем количество для избежания долгой загрузки
-                    if len(dialogs_list) >= 100:
+                    if len(dialogs_list) >= 50:
                         break
                 
-                print(f"Найдено {len(dialogs_list)} диалогов")
+                print(f"Всего найдено {len(dialogs_list)} диалогов")
                 
                 # Обрабатываем каждый диалог
+                processed = 0
+                private_chats = 0
                 for i, dialog in enumerate(dialogs_list):
                     try:
-                        print(f"Обрабатываем диалог {i+1}/{len(dialogs_list)}")
+                        processed += 1
                         
-                        # Только приватные чаты с обычными пользователями
-                        if (hasattr(dialog.chat, 'type') and 
-                            dialog.chat.type.name == 'PRIVATE' and
-                            not getattr(dialog.chat, 'is_self', False) and
-                            not getattr(dialog.chat, 'is_bot', False) and
-                            not getattr(dialog.chat, 'is_deleted', False) and
-                            dialog.chat.id != 777000):  # Исключаем Telegram Service
+                        # Получаем информацию о чате
+                        chat = dialog.chat
+                        print(f"Диалог {i+1}: ID={chat.id}, Тип={getattr(chat, 'type', 'unknown')}")
+                        
+                        # Проверяем что это приватный чат
+                        if (hasattr(chat, 'type') and 
+                            str(chat.type) == 'ChatType.PRIVATE' and
+                            chat.id != me.id and  # Исключаем "Избранное"
+                            chat.id != 777000):   # Исключаем Telegram Service
+                            
+                            private_chats += 1
                             
                             contact_data = {
-                                "id": dialog.chat.id,
-                                "first_name": getattr(dialog.chat, 'first_name', ''),
-                                "last_name": getattr(dialog.chat, 'last_name', ''),
-                                "username": getattr(dialog.chat, 'username', ''),
-                                "phone": getattr(dialog.chat, 'phone_number', ''),
-                                "display_name": ""
+                                "id": chat.id,
+                                "first_name": getattr(chat, 'first_name', '') or '',
+                                "last_name": getattr(chat, 'last_name', '') or '',
+                                "username": getattr(chat, 'username', '') or '',
+                                "phone": getattr(chat, 'phone_number', '') or '',
+                                "display_name": "",
+                                "is_bot": getattr(chat, 'is_bot', False),
+                                "is_deleted": getattr(chat, 'is_deleted', False)
                             }
+                            
+                            # Пропускаем ботов и удаленные аккаунты если нужно
+                            if contact_data["is_bot"] or contact_data["is_deleted"]:
+                                print(f"Пропускаем: бот={contact_data['is_bot']}, удален={contact_data['is_deleted']}")
+                                continue
                             
                             # Формируем отображаемое имя
                             name_parts = []
@@ -407,26 +441,38 @@ class TelegramManager:
                                 contact_data["display_name"] = f"User {contact_data['id']}"
                             
                             contacts.append(contact_data)
-                            print(f"Добавлен контакт: {contact_data['display_name']}")
+                            print(f"✓ Добавлен контакт: {contact_data['display_name']} (ID: {contact_data['id']})")
                         
                     except Exception as dialog_error:
                         print(f"Ошибка при обработке диалога {i+1}: {dialog_error}")
                         continue
 
-                print(f"=== Получение контактов завершено. Найдено {len(contacts)} контактов ===")
+                print(f"=== Обработка завершена ===")
+                print(f"Всего диалогов обработано: {processed}")
+                print(f"Приватных чатов найдено: {private_chats}")
+                print(f"Контактов добавлено: {len(contacts)}")
                 
                 return {
                     "status": "success", 
                     "contacts": contacts,
-                    "total_found": len(contacts)
+                    "total_found": len(contacts),
+                    "debug_info": {
+                        "total_dialogs": len(dialogs_list),
+                        "private_chats": private_chats,
+                        "account_name": account.name
+                    }
                 }
                 
             except Exception as get_error:
                 print(f"Ошибка при получении диалогов: {get_error}")
+                import traceback
+                traceback.print_exc()
                 return {"status": "error", "message": f"Ошибка получения диалогов: {str(get_error)}"}
 
         except Exception as e:
             print(f"Общая ошибка получения контактов для аккаунта {account_id}: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return {"status": "error", "message": str(e)}
 
     async def get_user_chats(self, account_id: int) -> Dict:

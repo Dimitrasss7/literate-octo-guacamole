@@ -314,6 +314,18 @@ async def get_accounts_api(db: Session = Depends(get_db)):
         })
     return JSONResponse(accounts_data)
 
+@app.get("/api/contacts/{account_id}")
+async def get_contacts(account_id: int):
+    """Получение контактов аккаунта"""
+    result = await telegram_manager.get_user_contacts(account_id)
+    return JSONResponse(result)
+
+@app.get("/api/chats/{account_id}")
+async def get_chats(account_id: int):
+    """Получение всех чатов аккаунта"""
+    result = await telegram_manager.get_user_chats(account_id)
+    return JSONResponse(result)
+
 @app.get("/api/stats")
 async def get_stats(db: Session = Depends(get_db)):
     """API для получения статистики"""
@@ -339,18 +351,7 @@ async def get_stats(db: Session = Depends(get_db)):
         }
     })
 
-# Новые маршруты для автоматических кампаний и контактов
-@app.get("/api/accounts/{account_id}/contacts")
-async def get_contacts(account_id: int):
-    """Получение контактов аккаунта"""
-    result = await telegram_manager.get_user_contacts(account_id)
-    return JSONResponse(result)
 
-@app.get("/api/accounts/{account_id}/chats")
-async def get_chats(account_id: int):
-    """Получение всех чатов аккаунта"""
-    result = await telegram_manager.get_user_chats(account_id)
-    return JSONResponse(result)
 
 @app.post("/api/auto-campaign")
 async def create_auto_campaign(request: Request, db: Session = Depends(get_db)):

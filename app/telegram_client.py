@@ -611,23 +611,76 @@ class TelegramManager:
                     if file_path and os.path.exists(file_path):
                         if schedule_date:
                             print(f"Планирование отправки файла: {file_path}")
-                            # Отправляем с файлом через планировщик
-                            sent_message = await client.send_document(
-                                chat_id=recipient,
-                                document=file_path,
-                                caption=message if message else None,
-                                schedule_date=schedule_date
-                            )
-                            print(f"✓ Файл успешно запланирован к отправке через Telegram на {schedule_date}")
+                            try:
+                                # Первая попытка - отправляем с файлом через планировщик
+                                sent_message = await client.send_document(
+                                    chat_id=recipient,
+                                    document=file_path,
+                                    caption=message if message else None,
+                                    schedule_date=schedule_date
+                                )
+                                print(f"✓ Файл успешно запланирован к отправке через Telegram на {schedule_date}")
+                            except Exception as file_error:
+                                error_str = str(file_error)
+                                print(f"Ошибка отправки файла: {error_str}")
+                                
+                                # Если ошибка связана с is_premium или получением данных пользователя
+                                if ("'NoneType' object has no attribute 'is_premium'" in error_str or 
+                                    "USER_INVALID" in error_str or 
+                                    "PEER_ID_INVALID" in error_str):
+                                    
+                                    print(f"Попытка отправить только текст без файла для {recipient}")
+                                    # Пытаемся отправить только текст
+                                    if message:
+                                        try:
+                                            sent_message = await client.send_message(
+                                                chat_id=recipient,
+                                                text=f"{message}\n\n[Файл не удалось отправить из-за ограничений Telegram]",
+                                                schedule_date=schedule_date
+                                            )
+                                            print(f"✓ Отправлен только текст (файл пропущен) для {recipient}")
+                                        except Exception as text_error:
+                                            print(f"Не удалось отправить даже текст: {text_error}")
+                                            raise text_error
+                                    else:
+                                        raise file_error
+                                else:
+                                    raise file_error
                         else:
                             print(f"Отправка файла немедленно: {file_path}")
-                            # Отправляем файл немедленно
-                            sent_message = await client.send_document(
-                                chat_id=recipient,
-                                document=file_path,
-                                caption=message if message else None
-                            )
-                            print(f"✓ Файл успешно отправлен немедленно")
+                            try:
+                                # Отправляем файл немедленно
+                                sent_message = await client.send_document(
+                                    chat_id=recipient,
+                                    document=file_path,
+                                    caption=message if message else None
+                                )
+                                print(f"✓ Файл успешно отправлен немедленно")
+                            except Exception as file_error:
+                                error_str = str(file_error)
+                                print(f"Ошибка отправки файла: {error_str}")
+                                
+                                # Если ошибка связана с is_premium или получением данных пользователя
+                                if ("'NoneType' object has no attribute 'is_premium'" in error_str or 
+                                    "USER_INVALID" in error_str or 
+                                    "PEER_ID_INVALID" in error_str):
+                                    
+                                    print(f"Попытка отправить только текст без файла для {recipient}")
+                                    # Пытаемся отправить только текст
+                                    if message:
+                                        try:
+                                            sent_message = await client.send_message(
+                                                chat_id=recipient,
+                                                text=f"{message}\n\n[Файл не удалось отправить из-за ограничений Telegram]"
+                                            )
+                                            print(f"✓ Отправлен только текст (файл пропущен) для {recipient}")
+                                        except Exception as text_error:
+                                            print(f"Не удалось отправить даже текст: {text_error}")
+                                            raise text_error
+                                    else:
+                                        raise file_error
+                                else:
+                                    raise file_error
                     else:
                         if schedule_date:
                             # Отправляем только текст через планировщик
@@ -646,12 +699,15 @@ class TelegramManager:
                             print(f"✓ Текстовое сообщение отправлено немедленно")
                 except Exception as send_error:
                     error_str = str(send_error)
-                    print(f"Ошибка при отправке: {error_str}")
+                    print(f"Финальная ошибка при отправке: {error_str}")
                     
-                    # Обработка специфической ошибки is_premium
+                    # Обработка специфических ошибок
                     if "'NoneType' object has no attribute 'is_premium'" in error_str:
-                        print(f"Пропускаем пользователя {recipient} из-за проблем с получением данных профиля")
-                        return {"status": "error", "message": f"Пользователь {recipient} недоступен или заблокирован"}
+                        print(f"Пользователь {recipient} недоступен из-за проблем с API")
+                        return {"status": "error", "message": f"Пользователь недоступен или заблокирован"}
+                    elif "USER_INVALID" in error_str or "PEER_ID_INVALID" in error_str:
+                        print(f"Пользователь {recipient} не найден или недоступен")
+                        return {"status": "error", "message": f"Пользователь не найден или недоступен"}
                     
                     raise send_error
 

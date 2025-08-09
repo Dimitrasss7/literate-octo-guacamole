@@ -233,162 +233,154 @@ class TelegramManager:
         }
 
     async def get_simple_client(self, account_id: int) -> Optional[Client]:
-        """Упрощенное получение клиента без временных сессий"""
+        """Упрощенное получение клиента"""
         try:
-            # Проверяем кэш
-            if account_id in self.clients:
-                client = self.clients[account_id]
-                try:
-                    if client.is_connected:
-                        return client
-                except:
-                    pass
-                # Удаляем неработающий клиент
-                try:
-                    await client.stop()
-                except:
-                    pass
-                del self.clients[account_id]
-
             # Получаем данные аккаунта
             db = next(get_db())
             try:
                 account = db.query(Account).filter(Account.id == account_id).first()
                 if not account or not account.is_active:
+                    print(f"Аккаунт {account_id} неактивен или не найден")
                     return None
 
                 # Ищем файл сессии
                 phone_clean = account.phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')
-                session_file = None
-
+                
+                # Список возможных имен сессий
                 possible_names = [
                     f"session_{phone_clean}",
                     f"session_{account.phone}",
-                    account.phone,
                     phone_clean
                 ]
 
+                session_file = None
                 for name in possible_names:
                     path = os.path.join(SESSIONS_DIR, f"{name}.session")
                     if os.path.exists(path):
                         session_file = os.path.join(SESSIONS_DIR, name)
+                        print(f"Найден файл сессии: {session_file}.session")
                         break
 
                 if not session_file:
-                    print(f"No session file found for account {account_id}")
+                    print(f"Файл сессии не найден для аккаунта {account_id}, проверенные пути:")
+                    for name in possible_names:
+                        print(f"  - {os.path.join(SESSIONS_DIR, name)}.session")
                     return None
 
-                # Создаем простой клиент используя оригинальную сессию
+                # Создаем клиент
                 client = Client(
                     session_file,
                     api_id=API_ID,
                     api_hash=API_HASH,
                     proxy=self._parse_proxy(account.proxy) if account.proxy else None,
-                    no_updates=True,
-                    takeout=False
+                    sleep_threshold=30,
+                    no_updates=True
                 )
 
-                # Стартуем клиент
-                await client.start()
+                # Проверяем подключение
+                if not client.is_connected:
+                    await client.start()
 
                 # Проверяем авторизацию
-                me = await client.get_me()
-
-                # Кэшируем клиент
-                self.clients[account_id] = client
-
-                # Обновляем статус
-                account.status = "online"
-                account.last_activity = datetime.utcnow()
-                db.commit()
-
-                return client
+                try:
+                    me = await client.get_me()
+                    print(f"✓ Клиент для аккаунта {account_id} успешно подключен: {me.first_name}")
+                    
+                    # Обновляем статус в БД
+                    account.status = "online"
+                    account.last_activity = datetime.utcnow()
+                    db.commit()
+                    
+                    return client
+                except Exception as auth_error:
+                    print(f"Ошибка авторизации клиента {account_id}: {auth_error}")
+                    await client.stop()
+                    return None
 
             finally:
                 db.close()
 
         except Exception as e:
-            print(f"Error in get_simple_client for account {account_id}: {str(e)}")
+            print(f"Общая ошибка создания клиента для аккаунта {account_id}: {str(e)}")
             return None
 
     async def get_user_contacts(self, account_id: int) -> Dict:
-        """Простое и быстрое получение контактов"""
+        """Получение контактов из диалогов"""
         try:
             print(f"=== Получение контактов для аккаунта {account_id} ===")
 
-            # Получаем клиент
             client = await self.get_simple_client(account_id)
             if not client:
-                print(f"Не удалось получить клиент для аккаунта {account_id}")
                 return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
 
             contacts = []
 
             try:
-                # Получаем информацию о пользователе
+                # Получаем информацию о себе
                 me = await client.get_me()
-                print(f"Авторизован как: {me.first_name}")
+                print(f"Получаем диалоги для: {me.first_name}")
 
-                # Получаем диалоги пользователя
-                print("Получение диалогов...")
+                # Получаем диалоги с таймаутом
                 dialog_count = 0
-
-                async for dialog in client.get_dialogs(limit=20):
+                async for dialog in client.get_dialogs(limit=50):
                     dialog_count += 1
                     chat = dialog.chat
 
-                    # Фильтруем только приватные чаты (не группы/каналы)
-                    if (hasattr(chat, 'type') and
-                        str(chat.type) == 'ChatType.PRIVATE' and
-                        chat.id != me.id and  # не себя
-                        chat.id != 777000 and  # не Telegram
-                        not getattr(chat, 'is_bot', False) and  # не боты
-                        not getattr(chat, 'is_deleted', False)):  # не удаленные
+                    # Пропускаем системные чаты и самого себя
+                    if chat.id == me.id or chat.id == 777000:
+                        continue
 
-                        # Формируем данные контакта
+                    # Обрабатываем только приватные чаты
+                    if hasattr(chat, 'type') and 'PRIVATE' in str(chat.type):
+                        # Получаем данные контакта
                         first_name = getattr(chat, 'first_name', '') or ''
                         last_name = getattr(chat, 'last_name', '') or ''
                         username = getattr(chat, 'username', '') or ''
-                        phone = getattr(chat, 'phone_number', '') or ''
 
-                        # Формируем отображаемое имя
-                        if first_name or last_name:
-                            display_name = f"{first_name} {last_name}".strip()
-                        elif username:
+                        # Формируем имя для отображения
+                        display_name = f"{first_name} {last_name}".strip()
+                        if not display_name and username:
                             display_name = f"@{username}"
-                        else:
-                            display_name = f"User {chat.id}"
+                        elif not display_name:
+                            display_name = f"Пользователь {chat.id}"
 
-                        contact_data = {
+                        contact_info = {
                             "id": chat.id,
                             "first_name": first_name,
                             "last_name": last_name,
                             "username": username,
-                            "phone": phone,
                             "display_name": display_name
                         }
 
-                        contacts.append(contact_data)
-                        print(f"Найден контакт: {display_name}")
+                        contacts.append(contact_info)
+                        print(f"✓ Контакт: {display_name}")
 
-                print(f"✓ Обработано {dialog_count} диалогов, найдено {len(contacts)} контактов")
+                    # Ограничиваем количество для быстрой загрузки
+                    if dialog_count >= 30:
+                        break
+
+                print(f"✓ Найдено {len(contacts)} контактов из {dialog_count} диалогов")
+
+                # Закрываем клиент
+                await client.stop()
 
                 return {
                     "status": "success",
                     "contacts": contacts,
-                    "total_found": len(contacts)
+                    "total": len(contacts)
                 }
 
-            except Exception as dialog_error:
-                print(f"Ошибка получения диалогов: {dialog_error}")
-                return {"status": "error", "message": f"Ошибка получения диалогов: {str(dialog_error)}"}
+            except Exception as e:
+                print(f"Ошибка получения диалогов: {str(e)}")
+                await client.stop()
+                return {"status": "error", "message": f"Ошибка получения диалогов: {str(e)}"}
 
         except Exception as e:
             print(f"Общая ошибка получения контактов: {str(e)}")
             return {"status": "error", "message": str(e)}
 
     async def get_user_chats(self, account_id: int) -> Dict:
-        """Простое получение чатов и каналов"""
+        """Получение чатов и каналов"""
         try:
             print(f"=== Получение чатов для аккаунта {account_id} ===")
 
@@ -400,45 +392,46 @@ class TelegramManager:
 
             try:
                 dialog_count = 0
-
-                async for dialog in client.get_dialogs(limit=20):
+                async for dialog in client.get_dialogs(limit=30):
                     dialog_count += 1
                     chat = dialog.chat
 
                     if hasattr(chat, 'type'):
-                        chat_type = str(chat.type).replace('ChatType.', '')
+                        chat_type = str(chat.type)
 
-                        # Формируем название чата
-                        if hasattr(chat, 'title') and chat.title:
+                        # Получаем название
+                        if hasattr(chat, 'title'):
                             title = chat.title
                         else:
                             first_name = getattr(chat, 'first_name', '') or ''
                             last_name = getattr(chat, 'last_name', '') or ''
                             title = f"{first_name} {last_name}".strip() or f"Chat {chat.id}"
 
-                        chat_info = {
+                        chat_data = {
                             "id": chat.id,
                             "title": title,
-                            "username": getattr(chat, 'username', '') or '',
-                            "type": chat_type
+                            "username": getattr(chat, 'username', '') or ''
                         }
 
                         # Распределяем по типам
-                        if chat_type == 'PRIVATE':
-                            chats["private"].append(chat_info)
-                        elif chat_type in ['GROUP', 'SUPERGROUP']:
-                            chats["groups"].append(chat_info)
-                        elif chat_type == 'CHANNEL':
-                            chats["channels"].append(chat_info)
+                        if 'PRIVATE' in chat_type:
+                            chats["private"].append(chat_data)
+                        elif 'GROUP' in chat_type:
+                            chats["groups"].append(chat_data)
+                        elif 'CHANNEL' in chat_type:
+                            chats["channels"].append(chat_data)
 
-                total_chats = len(chats['private']) + len(chats['groups']) + len(chats['channels'])
-                print(f"✓ Найдено чатов: {total_chats}")
+                print(f"✓ Найдено: {len(chats['private'])} приватных, {len(chats['groups'])} групп, {len(chats['channels'])} каналов")
+
+                # Закрываем клиент
+                await client.stop()
 
                 return {"status": "success", "chats": chats}
 
-            except Exception as chats_error:
-                print(f"Ошибка получения чатов: {chats_error}")
-                return {"status": "error", "message": f"Ошибка получения чатов: {str(chats_error)}"}
+            except Exception as e:
+                print(f"Ошибка получения чатов: {str(e)}")
+                await client.stop()
+                return {"status": "error", "message": str(e)}
 
         except Exception as e:
             print(f"Общая ошибка получения чатов: {str(e)}")

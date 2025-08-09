@@ -353,22 +353,54 @@ class TelegramManager:
                 # Очищаем chat_id от лишних символов
                 clean_chat_id = chat_id.strip()
                 
-                # Для приватных ссылок (с +) добавляем обратно, для обычных username убираем @
+                # Определяем тип чата и подготавливаем target_chat
                 if clean_chat_id.startswith('+'):
-                    # Приватная ссылка - используем как есть
-                    target_chat = f"https://t.me/{clean_chat_id}"
+                    # Приватная ссылка - используем invite link напрямую
+                    try:
+                        # Сначала присоединяемся к чату по ссылке
+                        invite_link = f"https://t.me/{clean_chat_id}"
+                        print(f"Joining chat via invite link: {invite_link}")
+                        chat_info = await client.join_chat(invite_link)
+                        target_chat = chat_info.id
+                        print(f"Joined chat, ID: {target_chat}")
+                    except Exception as join_error:
+                        print(f"Failed to join chat: {join_error}")
+                        # Пробуем использовать ссылку напрямую
+                        target_chat = clean_chat_id
                 elif clean_chat_id.startswith('@'):
-                    target_chat = clean_chat_id[1:]  # убираем @
+                    target_chat = clean_chat_id  # оставляем @ для групп/каналов
+                elif clean_chat_id.isdigit() or clean_chat_id.startswith('-'):
+                    # Это ID чата
+                    target_chat = int(clean_chat_id)
                 else:
-                    target_chat = clean_chat_id
+                    # Обычный username без @
+                    target_chat = f"@{clean_chat_id}"
                 
                 print(f"Sending message to target_chat: {target_chat}")
                 
                 # Отправляем сообщение
-                if file_path and os.path.exists(file_path):
-                    result = await client.send_document(target_chat, file_path, caption=message)
-                else:
-                    result = await client.send_message(target_chat, message)
+                try:
+                    if file_path and os.path.exists(file_path):
+                        result = await client.send_document(target_chat, file_path, caption=message)
+                    else:
+                        result = await client.send_message(target_chat, message)
+                except Exception as send_error:
+                    # Если не удалось отправить, пробуем альтернативные методы
+                    print(f"First attempt failed: {send_error}")
+                    
+                    if clean_chat_id.startswith('+'):
+                        # Для приватных ссылок пробуем другой подход
+                        try:
+                            # Получаем информацию о чате
+                            chat = await client.get_chat(f"https://t.me/{clean_chat_id}")
+                            if file_path and os.path.exists(file_path):
+                                result = await client.send_document(chat.id, file_path, caption=message)
+                            else:
+                                result = await client.send_message(chat.id, message)
+                        except Exception as alt_error:
+                            raise send_error
+                    else:
+                        raise send_error
                 
                 print(f"Message sent successfully: {result}")
                 

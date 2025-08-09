@@ -160,17 +160,33 @@ class MessageSender:
                     
                     # Обрабатываем ссылки Telegram
                     if 't.me/' in clean_r:
-                        # Извлекаем username из ссылки
-                        if 't.me/joinchat/' in clean_r or 't.me/+' in clean_r:
-                            # Это приватная ссылка на канал/группу, используем как есть
+                        if 't.me/joinchat/' in clean_r:
+                            # Старый формат приватных ссылок
+                            clean_r = clean_r.split('t.me/joinchat/')[1]
+                            clean_r = f"+{clean_r}"
+                        elif 't.me/+' in clean_r:
+                            # Новый формат приватных ссылок
                             clean_r = clean_r.split('t.me/')[1]
                         else:
                             # Это обычный username
                             clean_r = clean_r.split('t.me/')[1].split('?')[0]  # убираем параметры
-                    
-                    # Убираем @ если есть в начале
-                    if clean_r.startswith('@'):
-                        clean_r = clean_r[1:]
+                            # Для обычных username не убираем @, оставляем как есть
+                            if not clean_r.startswith('@') and not clean_r.startswith('+'):
+                                clean_r = f"@{clean_r}"
+                    else:
+                        # Если это просто username или ID
+                        if clean_r.startswith('@'):
+                            # Оставляем @ для групп и каналов
+                            pass
+                        elif clean_r.startswith('+'):
+                            # Приватная ссылка без t.me
+                            pass  
+                        elif clean_r.isdigit() or clean_r.startswith('-'):
+                            # Это ID чата
+                            pass
+                        else:
+                            # Обычный username без @ - добавляем @
+                            clean_r = f"@{clean_r}"
                     
                     if clean_r:
                         cleaned_recipients.append(clean_r)

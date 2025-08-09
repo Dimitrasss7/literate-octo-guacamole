@@ -449,43 +449,48 @@ class TelegramManager:
             contacts = []
             
             try:
-                # Получаем контакты через правильный метод iter_contacts
-                async for contact in client.get_contacts():
-                    try:
-                        contact_info = {
-                            "id": contact.id,
-                            "username": contact.username,
-                            "first_name": contact.first_name,
-                            "last_name": contact.last_name,
-                            "phone": getattr(contact, 'phone_number', None)
-                        }
-                        contacts.append(contact_info)
-                    except Exception as contact_error:
-                        print(f"Error processing contact: {contact_error}")
-                        continue
+                # Получаем контакты через метод get_contacts
+                contacts_result = await client.get_contacts()
+                print(f"get_contacts returned: {type(contacts_result)}")
+                
+                if hasattr(contacts_result, '__iter__'):
+                    for contact in contacts_result:
+                        try:
+                            contact_info = {
+                                "id": contact.id,
+                                "username": contact.username,
+                                "first_name": contact.first_name,
+                                "last_name": contact.last_name,
+                                "phone": getattr(contact, 'phone_number', None)
+                            }
+                            contacts.append(contact_info)
+                        except Exception as contact_error:
+                            print(f"Error processing contact: {contact_error}")
+                            continue
                     
                 print(f"Found {len(contacts)} contacts via get_contacts for account {account_id}")
                 
             except Exception as contacts_error:
                 print(f"Error getting contacts via get_contacts: {contacts_error}")
                 
-                # Fallback 1: получаем контакты через iter_contacts если доступно
+                # Fallback 1: пробуем iter_contacts как async for
                 try:
-                    if hasattr(client, 'iter_contacts'):
-                        async for contact in client.iter_contacts():
-                            try:
-                                contact_info = {
-                                    "id": contact.id,
-                                    "username": contact.username,
-                                    "first_name": contact.first_name,
-                                    "last_name": contact.last_name,
-                                    "phone": getattr(contact, 'phone_number', None)
-                                }
-                                contacts.append(contact_info)
-                            except Exception as contact_error:
-                                print(f"Error processing contact via iter_contacts: {contact_error}")
-                                continue
-                        print(f"Found {len(contacts)} contacts via iter_contacts for account {account_id}")
+                    contact_count = 0
+                    async for contact in client.iter_contacts():
+                        try:
+                            contact_info = {
+                                "id": contact.id,
+                                "username": contact.username,
+                                "first_name": contact.first_name,
+                                "last_name": contact.last_name,
+                                "phone": getattr(contact, 'phone_number', None)
+                            }
+                            contacts.append(contact_info)
+                            contact_count += 1
+                        except Exception as contact_error:
+                            print(f"Error processing contact via iter_contacts: {contact_error}")
+                            continue
+                    print(f"Found {contact_count} contacts via iter_contacts for account {account_id}")
                 except Exception as iter_error:
                     print(f"Error getting contacts via iter_contacts: {iter_error}")
                 

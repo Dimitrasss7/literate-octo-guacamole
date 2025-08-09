@@ -1,9 +1,8 @@
-
 import asyncio
 import json
 import csv
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Optional
 from sqlalchemy.orm import Session
 from app.database import Account, Campaign, SendLog, get_db
 from app.telegram_client import telegram_manager
@@ -11,46 +10,46 @@ from app.telegram_client import telegram_manager
 class MessageSender:
     def __init__(self):
         self.active_campaigns: Dict[int, bool] = {}
-    
+
     async def start_campaign(self, campaign_id: int) -> Dict:
         """Запуск кампании рассылки"""
         if campaign_id in self.active_campaigns:
             return {"status": "error", "message": "Кампания уже запущена"}
-        
+
         db = next(get_db())
         try:
             campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
             if not campaign:
                 return {"status": "error", "message": "Кампания не найдена"}
-            
+
             campaign.status = "running"
             db.commit()
-            
+
             self.active_campaigns[campaign_id] = True
-            
+
             # Запускаем отправку в фоне
             asyncio.create_task(self._run_campaign(campaign_id))
-            
+
             return {"status": "success", "message": "Кампания запущена"}
         finally:
             db.close()
-    
+
     async def create_auto_campaign(self, account_id: int, message: str, delay_seconds: int = 5, target_types: List[str] = None) -> Dict:
         """Создание автоматической кампании для всех контактов пользователя"""
         if target_types is None:
             target_types = ["private"]  # По умолчанию только приватные сообщения
-        
+
         try:
             from app.telegram_client import telegram_manager
-            
+
             # Получаем все чаты пользователя
             chats_result = await telegram_manager.get_user_chats(account_id)
             if chats_result["status"] != "success":
                 return {"status": "error", "message": "Не удалось получить список чатов"}
-            
+
             chats = chats_result["chats"]
             recipients = {"private": [], "groups": [], "channels": []}
-            
+
             # Формируем списки получателей
             for chat_type in target_types:
                 if chat_type in chats:
@@ -59,7 +58,7 @@ class MessageSender:
                             recipients[chat_type].append(f"@{chat['username']}")
                         else:
                             recipients[chat_type].append(str(chat["id"]))
-            
+
             # Создаем кампанию в базе данных
             db = next(get_db())
             try:
@@ -75,21 +74,21 @@ class MessageSender:
                     channels_list="\n".join(recipients["channels"]) if recipients["channels"] else None,
                     status="created"
                 )
-                
+
                 db.add(campaign)
                 db.commit()
                 db.refresh(campaign)
-                
+
                 return {
                     "status": "success", 
                     "campaign_id": campaign.id,
                     "recipients_count": sum(len(recipients[t]) for t in recipients),
                     "message": f"Создана автоматическая кампания с {sum(len(recipients[t]) for t in recipients)} получателями"
                 }
-                
+
             finally:
                 db.close()
-                
+
         except Exception as e:
             print(f"Error creating auto campaign: {str(e)}")
             return {"status": "error", "message": str(e)}
@@ -100,11 +99,11 @@ class MessageSender:
         result = await self.create_auto_campaign(account_id, message, delay_seconds, target_types)
         if result["status"] != "success":
             return result
-        
+
         # Запускаем кампанию
         campaign_id = result["campaign_id"]
         start_result = await self.start_campaign(campaign_id)
-        
+
         if start_result["status"] == "success":
             return {
                 "status": "success",
@@ -119,18 +118,18 @@ class MessageSender:
         """Остановка кампании"""
         if campaign_id in self.active_campaigns:
             self.active_campaigns[campaign_id] = False
-            
+
             db = next(get_db())
             campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
             if campaign:
                 campaign.status = "paused"
                 db.commit()
             db.close()
-            
+
             return {"status": "success", "message": "Кампания остановлена"}
-        
+
         return {"status": "error", "message": "Кампания не активна"}
-    
+
     async def _run_campaign(self, campaign_id: int):
         """Выполнение кампании рассылки"""
         db = next(get_db())
@@ -138,42 +137,42 @@ class MessageSender:
             campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
             if not campaign:
                 return
-            
+
             # Получаем активные аккаунты
             accounts = db.query(Account).filter(Account.is_active == True).all()
             if not accounts:
                 campaign.status = "completed"
                 db.commit()
                 return
-            
+
             # Парсим списки получателей
             recipients = self._parse_recipients(campaign)
-            
+
             account_index = 0
             total_sent = 0
-            
+
             for recipient_type, recipient_list in recipients.items():
                 if not self.active_campaigns.get(campaign_id, False):
                     break
-                
+
                 message = self._get_message_for_type(campaign, recipient_type)
                 if not message:
                     continue
-                
+
                 for recipient in recipient_list:
                     if not self.active_campaigns.get(campaign_id, False):
                         break
-                    
+
                     # Выбираем аккаунт по ротации
                     account = accounts[account_index % len(accounts)]
                     account_index += 1
-                    
+
                     # Проверяем лимиты аккаунта
                     if not self._check_account_limits(account):
                         continue
-                    
+
                     print(f"Sending message to {recipient} via account {account.id}")
-                    
+
                     # Отправляем сообщение
                     result = await telegram_manager.send_message(
                         account.id,
@@ -181,63 +180,63 @@ class MessageSender:
                         message,
                         campaign.attachment_path
                     )
-                    
+
                     print(f"Send result: {result}")
-                    
+
                     # Логируем результат
                     self._log_send_result(
                         campaign_id, account.id, recipient, 
                         recipient_type, result
                     )
-                    
+
                     if result["status"] == "success":
                         total_sent += 1
                         print(f"Message sent successfully to {recipient}")
                     else:
                         print(f"Failed to send message to {recipient}: {result.get('message', 'Unknown error')}")
-                    
+
                     # Задержка между отправками
                     await asyncio.sleep(campaign.delay_seconds)
-            
+
             # Завершаем кампанию
             campaign.status = "completed"
             db.commit()
-            
+
             if campaign_id in self.active_campaigns:
                 del self.active_campaigns[campaign_id]
-                
+
         finally:
             db.close()
-    
+
     def _parse_recipients(self, campaign: Campaign) -> Dict[str, List[str]]:
         """Парсинг списков получателей"""
         recipients = {}
-        
+
         if campaign.channels_list:
             try:
                 recipients["channel"] = json.loads(campaign.channels_list)
             except:
                 recipients["channel"] = [line.strip() for line in campaign.channels_list.split("\n") if line.strip()]
-        
+
         if campaign.groups_list:
             try:
                 recipients["group"] = json.loads(campaign.groups_list)
             except:
                 recipients["group"] = [line.strip() for line in campaign.groups_list.split("\n") if line.strip()]
-        
+
         if campaign.private_list:
             try:
                 recipients["private"] = json.loads(campaign.private_list)
             except:
                 recipients["private"] = [line.strip() for line in campaign.private_list.split("\n") if line.strip()]
-        
+
         # Убираем пустые строки и очищаем от лишних символов
         for key in recipients:
             cleaned_recipients = []
             for r in recipients[key]:
                 if r.strip():
                     clean_r = r.strip()
-                    
+
                     # Обрабатываем ссылки Telegram
                     if 't.me/' in clean_r:
                         if 't.me/joinchat/' in clean_r:
@@ -267,14 +266,14 @@ class MessageSender:
                         else:
                             # Обычный username без @ - добавляем @
                             clean_r = f"@{clean_r}"
-                    
+
                     if clean_r:
                         cleaned_recipients.append(clean_r)
             recipients[key] = cleaned_recipients
-        
+
         print(f"Parsed recipients: {recipients}")
         return recipients
-    
+
     def _get_message_for_type(self, campaign: Campaign, recipient_type: str) -> str:
         """Получение сообщения для типа получателя"""
         if recipient_type == "channel":
@@ -284,19 +283,19 @@ class MessageSender:
         elif recipient_type == "private":
             return campaign.private_message
         return None
-    
+
     def _check_account_limits(self, account: Account) -> bool:
         """Проверка лимитов аккаунта"""
         from app.config import MAX_MESSAGES_PER_HOUR, MAX_MESSAGES_PER_DAY
-        
+
         if account.messages_sent_today >= MAX_MESSAGES_PER_DAY:
             return False
-        
+
         if account.messages_sent_hour >= MAX_MESSAGES_PER_HOUR:
             return False
-        
+
         return True
-    
+
     def _log_send_result(self, campaign_id: int, account_id: int, 
                         recipient: str, recipient_type: str, result: Dict):
         """Логирование результата отправки"""
@@ -314,6 +313,83 @@ class MessageSender:
             db.commit()
         finally:
             db.close()
+
+    async def create_and_start_auto_campaign(self, account_id: int, message: str, 
+                                          delay_seconds: int, unique_targets: bool = True) -> Dict:
+        """Создание и запуск автоматической кампании"""
+        try:
+            # Получаем контакты пользователя
+            contacts_result = await telegram_manager.get_user_contacts(account_id)
+            if contacts_result["status"] != "success":
+                return {"status": "error", "message": f"Не удалось получить контакты: {contacts_result.get('message', 'Unknown error')}"}
+
+            contacts = contacts_result.get("contacts", [])
+            if not contacts:
+                return {"status": "error", "message": "У аккаунта нет контактов для рассылки"}
+
+            # Создаем список целей из контактов
+            targets = []
+            for contact in contacts:
+                if contact.get("username"):
+                    targets.append(f"@{contact['username']}")
+                elif contact.get("id"):
+                    targets.append(str(contact["id"]))
+
+            if not targets:
+                return {"status": "error", "message": "Не найдено целей для рассылки"}
+
+            # Создаем кампанию
+            campaign_name = f"Auto Campaign {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            campaign_result = await self.create_campaign(
+                name=campaign_name,
+                message=message,
+                targets=targets,
+                account_id=account_id,
+                delay_seconds=delay_seconds
+            )
+
+            if campaign_result["status"] != "success":
+                return campaign_result
+
+            campaign_id = campaign_result["campaign_id"]
+
+            # Запускаем кампанию
+            start_result = await self.start_campaign(campaign_id)
+
+            return {
+                "status": "success",
+                "campaign_id": campaign_id,
+                "targets_count": len(targets),
+                "message": "Автоматическая кампания создана и запущена"
+            }
+
+        except Exception as e:
+            print(f"Error in create_and_start_auto_campaign: {str(e)}")
+            return {"status": "error", "message": str(e)}
+
+    async def create_campaign(self, name: str, message: str, targets: List[str], 
+                              account_id: int, file_path: Optional[str] = None, 
+                              delay_seconds: int = 1) -> Dict:
+        """Создание кампании рассылки"""
+        db = next(get_db())
+        try:
+            campaign = Campaign(
+                name=name,
+                description=message,
+                private_message=message,
+                private_list="\n".join(targets),
+                account_id=account_id,
+                attachment_path=file_path,
+                delay_seconds=delay_seconds,
+                status="created"
+            )
+            db.add(campaign)
+            db.commit()
+            db.refresh(campaign)
+            return {"status": "success", "campaign_id": campaign.id}
+        finally:
+            db.close()
+
 
 # Глобальный экземпляр отправителя
 message_sender = MessageSender()

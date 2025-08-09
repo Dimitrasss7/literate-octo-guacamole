@@ -8,27 +8,8 @@ load_dotenv()
 # Настройки приложения
 DATABASE_URL = "sqlite:///./telegram_sender.db"
 
-# Генерируем правильные ключи если они не указаны
-def get_or_generate_key(env_name: str) -> bytes:
-    key_str = os.getenv(env_name)
-    if key_str:
-        try:
-            # Пробуем использовать как base64 ключ
-            from base64 import urlsafe_b64decode
-            key = urlsafe_b64decode(key_str + '==')  # Добавляем padding если нужно
-            if len(key) == 32:
-                return key_str.encode()
-            else:
-                print(f"Warning: {env_name} is not 32 bytes, generating new key")
-                return Fernet.generate_key()
-        except:
-            print(f"Warning: Invalid {env_name}, generating new key")
-            return Fernet.generate_key()
-    else:
-        return Fernet.generate_key()
-
 SECRET_KEY = os.getenv("SECRET_KEY", "your_secret_key_here")
-ENCRYPTION_KEY = get_or_generate_key("ENCRYPTION_KEY")
+ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
 
 # Настройки Telegram API
 API_ID = os.getenv("API_ID", "")
@@ -84,8 +65,14 @@ if not ENCRYPTION_KEY:
     except Exception as e:
         print(f"Failed to save encryption key: {e}")
 
-elif len(ENCRYPTION_KEY.encode()) != 32:
-    print(f"Warning: ENCRYPTION_KEY length is {len(ENCRYPTION_KEY.encode())}, should be 32 bytes")
-    # Генерируем новый правильный ключ
-    ENCRYPTION_KEY = Fernet.generate_key().decode()
-    print("Generated new 32-byte encryption key")
+else:
+    # Проверяем, что ключ правильной длины
+    try:
+        # Пробуем декодировать как base64
+        key_bytes = Fernet(ENCRYPTION_KEY.encode())
+        print("ENCRYPTION_KEY is valid")
+    except Exception:
+        print(f"Warning: Invalid ENCRYPTION_KEY, generating new key")
+        # Генерируем новый правильный ключ
+        ENCRYPTION_KEY = Fernet.generate_key().decode()
+        print("Generated new 32-byte encryption key")

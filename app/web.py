@@ -1,4 +1,3 @@
-
 import os
 import json
 from typing import List, Optional
@@ -12,6 +11,7 @@ from app.database import Account, Campaign, SendLog, get_db
 from app.telegram_client import telegram_manager
 from app.sender import message_sender
 from app.proxy_manager import proxy_manager
+from app.settings_manager import settings_manager
 from app.config import UPLOADS_DIR
 
 app = FastAPI(title="Telegram Mass Sender")
@@ -28,7 +28,7 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
     """Главная страница dashboard"""
     accounts = db.query(Account).all()
     campaigns = db.query(Campaign).order_by(Campaign.created_at.desc()).limit(10).all()
-    
+
     # Статистика
     total_accounts = len(accounts)
     active_accounts = len([a for a in accounts if a.is_active and a.status == "online"])
@@ -36,7 +36,7 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
     messages_sent_today = db.query(SendLog).filter(
         SendLog.sent_at >= datetime.utcnow().date()
     ).count()
-    
+
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "accounts": accounts,
@@ -66,7 +66,7 @@ async def add_account(phone: str = Form(...), use_auto_proxy: bool = Form(False)
         proxy = proxy_manager.get_proxy_for_phone(phone)
         if not proxy:
             return JSONResponse({"status": "error", "message": "Нет доступных прокси. Загрузите список прокси."})
-    
+
     result = await telegram_manager.add_account(phone, proxy)
     return JSONResponse(result)
 
@@ -81,20 +81,20 @@ async def verify_code(
     """Подтверждение кода"""
     try:
         result = await telegram_manager.verify_code(phone, code, phone_code_hash, session_name, proxy)
-        
+
         # Проверяем, что result не None
         if result is None:
             result = {"status": "error", "message": "Внутренняя ошибка сервера"}
-        
+
         # Если код истек, автоматически отправляем новый
         if result.get("status") == "code_expired":
             new_code_result = await telegram_manager.add_account(phone, proxy)
             if new_code_result and new_code_result.get("status") == "code_required":
                 result["new_phone_code_hash"] = new_code_result["phone_code_hash"]
                 result["message"] = "Код истек. Новый код отправлен на ваш номер."
-        
+
         return JSONResponse(result)
-        
+
     except Exception as e:
         return JSONResponse({"status": "error", "message": f"Ошибка при подтверждении кода: {str(e)}"})
 
@@ -161,7 +161,7 @@ async def create_campaign(
     db: Session = Depends(get_db)
 ):
     """Создание новой кампании"""
-    
+
     attachment_path = None
     if attachment and attachment.filename:
         file_path = os.path.join(UPLOADS_DIR, attachment.filename)
@@ -169,7 +169,7 @@ async def create_campaign(
             content = await attachment.read()
             f.write(content)
         attachment_path = file_path
-    
+
     campaign = Campaign(
         name=name,
         channel_message=channel_message,
@@ -181,10 +181,10 @@ async def create_campaign(
         delay_seconds=delay_seconds,
         attachment_path=attachment_path
     )
-    
+
     db.add(campaign)
     db.commit()
-    
+
     return RedirectResponse(url="/campaigns", status_code=303)
 
 @app.post("/campaigns/{campaign_id}/start")
@@ -199,7 +199,7 @@ async def stop_campaign(campaign_id: int):
     result = await message_sender.stop_campaign(campaign_id)
     return JSONResponse(result)
 
-@app.get("/logs", response_class=HTMLResponse)
+@app.get("/logs")
 async def logs_page(request: Request, db: Session = Depends(get_db)):
     """Страница логов"""
     logs = db.query(SendLog).order_by(SendLog.sent_at.desc()).limit(100).all()
@@ -207,6 +207,13 @@ async def logs_page(request: Request, db: Session = Depends(get_db)):
         "request": request,
         "logs": logs
     })
+
+@app.get("/settings")
+async def settings_page(request: Request):
+    """Страница настроек антиспам-системы"""
+    return templates.TemplateResponse("settings.html", {"request": request})
+
+# API endpoints
 
 @app.get("/proxies", response_class=HTMLResponse)
 async def proxies_page(request: Request):
@@ -224,11 +231,51 @@ async def upload_proxies(proxies_text: str = Form(...)):
     try:
         proxy_manager.save_proxies(proxies_text)
         return JSONResponse({
-            "status": "success", 
+            "status": "success",
             "message": f"Загружено {proxy_manager.get_available_proxies_count()} прокси"
         })
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)})
+
+@app.post("/api/proxy/delete/{proxy_id}")
+async def delete_proxy(proxy_id: int):
+    """Удаление прокси"""
+    success = proxy_manager.remove_proxy(proxy_id)
+    return {"success": success}
+
+@app.get("/api/settings")
+async def get_settings():
+    """Получение всех настроек"""
+    return {"success": True, "settings": settings_manager.get_settings_dict()}
+
+@app.post("/api/settings")
+async def save_all_settings(request: Request):
+    """Сохранение всех настроек"""
+    try:
+        data = await request.json()
+        success = settings_manager.update_all_settings(data)
+        return {"success": success, "message": "Настройки сохранены" if success else "Ошибка сохранения"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.post("/api/settings/{section}")
+async def save_settings_section(section: str, request: Request):
+    """Сохранение конкретной секции настроек"""
+    try:
+        data = await request.json()
+        success = settings_manager.update_section(section, data)
+        return {"success": success, "message": f"Настройки {section} сохранены" if success else "Ошибка сохранения"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.post("/api/settings/reset")
+async def reset_settings():
+    """Сброс настроек к умолчаниям"""
+    try:
+        success = settings_manager.reset_to_defaults()
+        return {"success": success, "message": "Настройки сброшены" if success else "Ошибка сброса"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
 
 @app.delete("/accounts/{account_id}")
 async def delete_account(account_id: int, db: Session = Depends(get_db)):
@@ -247,7 +294,7 @@ async def get_stats(db: Session = Depends(get_db)):
     """API для получения статистики"""
     accounts = db.query(Account).all()
     campaigns = db.query(Campaign).all()
-    
+
     return JSONResponse({
         "accounts": {
             "total": len(accounts),
@@ -266,3 +313,7 @@ async def get_stats(db: Session = Depends(get_db)):
             "used": proxy_manager.get_used_proxies_count()
         }
     })
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

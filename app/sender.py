@@ -136,7 +136,10 @@ class MessageSender:
         try:
             campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
             if not campaign:
+                print(f"Campaign {campaign_id} not found")
                 return
+
+            print(f"Starting campaign {campaign_id} execution")
 
             # Для кампаний по контактам используем только тот аккаунт, который был указан
             if hasattr(campaign, 'account_id') and campaign.account_id:
@@ -147,6 +150,7 @@ class MessageSender:
                 ).first()
                 
                 if not account:
+                    print(f"Account {campaign.account_id} not found or inactive")
                     campaign.status = "completed"
                     db.commit()
                     return
@@ -157,27 +161,44 @@ class MessageSender:
                 # Для обычных кампаний используем все активные аккаунты
                 accounts = db.query(Account).filter(Account.is_active == True).all()
                 if not accounts:
+                    print("No active accounts found")
                     campaign.status = "completed"
                     db.commit()
                     return
 
             # Парсим списки получателей
             recipients = self._parse_recipients(campaign)
+            print(f"Recipients parsed: {recipients}")
+
+            if not recipients or not any(recipients.values()):
+                print("No recipients found")
+                campaign.status = "completed"
+                db.commit()
+                return
 
             account_index = 0
             total_sent = 0
 
             for recipient_type, recipient_list in recipients.items():
                 if not self.active_campaigns.get(campaign_id, False):
+                    print(f"Campaign {campaign_id} stopped by user")
                     break
+
+                if not recipient_list:
+                    print(f"No recipients for type {recipient_type}")
+                    continue
 
                 message = self._get_message_for_type(campaign, recipient_type)
                 if not message:
+                    print(f"No message for recipient type {recipient_type}")
                     continue
 
+                print(f"Processing {len(recipient_list)} recipients of type {recipient_type}")
+
                 # Отправляем все сообщения мгновенно через встроенный планировщик Telegram
-                for recipient in recipient_list:
+                for i, recipient in enumerate(recipient_list):
                     if not self.active_campaigns.get(campaign_id, False):
+                        print(f"Campaign {campaign_id} stopped during execution")
                         break
 
                     # Выбираем аккаунт
@@ -191,32 +212,47 @@ class MessageSender:
 
                     # Проверяем лимиты аккаунта
                     if not self._check_account_limits(account):
+                        print(f"Account {account.id} reached limits, skipping")
                         continue
 
-                    print(f"Sending message instantly via Telegram scheduler to {recipient} via account {account.id}")
+                    print(f"[{i+1}/{len(recipient_list)}] Sending message to {recipient} via account {account.id}")
 
-                    # Отправляем сообщение через встроенный планировщик Telegram с задержкой из кампании
-                    result = await telegram_manager.send_message(
-                        account.id,
-                        recipient,
-                        message,
-                        campaign.attachment_path,
-                        schedule_seconds=campaign.delay_seconds
-                    )
+                    try:
+                        # Отправляем сообщение через встроенный планировщик Telegram с задержкой из кампании
+                        result = await telegram_manager.send_message(
+                            account.id,
+                            recipient,
+                            message,
+                            getattr(campaign, 'attachment_path', None),
+                            schedule_seconds=campaign.delay_seconds if campaign.delay_seconds > 0 else 0
+                        )
 
-                    print(f"Telegram scheduler result for {recipient}: {result}")
+                        print(f"Send result for {recipient}: {result}")
 
-                    # Логируем результат
-                    self._log_send_result(
-                        campaign_id, account.id, recipient, 
-                        recipient_type, result
-                    )
+                        # Логируем результат
+                        self._log_send_result(
+                            campaign_id, account.id, recipient, 
+                            recipient_type, result
+                        )
 
-                    if result["status"] == "success":
-                        total_sent += 1
-                        print(f"Message scheduled successfully via Telegram to {recipient} (will be sent in {campaign.delay_seconds} seconds by Telegram)")
-                    else:
-                        print(f"Failed to schedule message to {recipient}: {result.get('message', 'Unknown error')}")
+                        if result["status"] == "success":
+                            total_sent += 1
+                            if campaign.delay_seconds > 0:
+                                print(f"✓ Message scheduled successfully via Telegram to {recipient} (will be sent in {campaign.delay_seconds} seconds)")
+                            else:
+                                print(f"✓ Message sent immediately to {recipient}")
+                        else:
+                            print(f"✗ Failed to send message to {recipient}: {result.get('message', 'Unknown error')}")
+
+                    except Exception as send_error:
+                        print(f"Exception while sending to {recipient}: {str(send_error)}")
+                        # Логируем ошибку
+                        self._log_send_result(
+                            campaign_id, account.id, recipient, 
+                            recipient_type, {"status": "error", "message": str(send_error)}
+                        )
+
+            print(f"Campaign {campaign_id} completed. Total sent: {total_sent}")
 
             # Завершаем кампанию
             campaign.status = "completed"
@@ -225,6 +261,16 @@ class MessageSender:
             if campaign_id in self.active_campaigns:
                 del self.active_campaigns[campaign_id]
 
+        except Exception as e:
+            print(f"Error in campaign {campaign_id}: {str(e)}")
+            # Обновляем статус кампании при ошибке
+            try:
+                campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+                if campaign:
+                    campaign.status = "error"
+                    db.commit()
+            except:
+                pass
         finally:
             db.close()
 
@@ -321,16 +367,27 @@ class MessageSender:
         """Логирование результата отправки"""
         db = next(get_db())
         try:
+            # Определяем статус для логирования
+            if result["status"] == "success":
+                log_status = "sent"
+                error_message = None
+            else:
+                log_status = "failed"
+                error_message = result.get("message", "Unknown error")
+
             log = SendLog(
                 campaign_id=campaign_id,
                 account_id=account_id,
                 recipient=recipient,
                 recipient_type=recipient_type,
-                status=result["status"],
-                error_message=result.get("message") if result["status"] != "success" else None
+                status=log_status,
+                error_message=error_message
             )
             db.add(log)
             db.commit()
+            print(f"Logged result for {recipient}: {log_status}")
+        except Exception as e:
+            print(f"Error logging send result: {str(e)}")
         finally:
             db.close()
 

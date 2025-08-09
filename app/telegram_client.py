@@ -226,13 +226,24 @@ class TelegramManager:
     async def get_client(self, account_id: int) -> Optional[Client]:
         """Получение клиента для аккаунта"""
         if account_id in self.clients:
-            return self.clients[account_id]
+            client = self.clients[account_id]
+            try:
+                # Проверяем, что клиент все еще подключен
+                await client.get_me()
+                return client
+            except:
+                # Если клиент не работает, удаляем его
+                del self.clients[account_id]
         
         db = next(get_db())
+        account = None
         try:
             account = db.query(Account).filter(Account.id == account_id).first()
             if not account or not account.is_active:
+                print(f"Account {account_id} not found or not active")
                 return None
+            
+            print(f"Creating client for account {account_id}")
             
             # Расшифровываем сессию
             session_data = self.cipher.decrypt(account.session_data.encode())
@@ -249,10 +260,17 @@ class TelegramManager:
                 session_path,
                 api_id=API_ID,
                 api_hash=API_HASH,
-                proxy=self._parse_proxy(account.proxy) if account.proxy else None
+                proxy=self._parse_proxy(account.proxy) if account.proxy else None,
+                sleep_threshold=60
             )
             
             await client.start()
+            print(f"Client started for account {account_id}")
+            
+            # Проверяем, что клиент работает
+            me = await client.get_me()
+            print(f"Client verified for {me.first_name}")
+            
             self.clients[account_id] = client
             
             # Обновляем статус
@@ -263,6 +281,7 @@ class TelegramManager:
             return client
             
         except Exception as e:
+            print(f"Error getting client for account {account_id}: {str(e)}")
             if account:
                 account.status = "error"
                 db.commit()
@@ -273,37 +292,56 @@ class TelegramManager:
     async def send_message(self, account_id: int, chat_id: str, message: str, file_path: Optional[str] = None) -> Dict:
         """Отправка сообщения"""
         try:
+            print(f"Attempting to send message to {chat_id} from account {account_id}")
+            
             client = await self.get_client(account_id)
             if not client:
+                print(f"Failed to get client for account {account_id}")
                 return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
             
             # Проверяем лимиты
             db = next(get_db())
-            account = db.query(Account).filter(Account.id == account_id).first()
-            
-            now = datetime.utcnow()
-            if account.last_message_time and (now - account.last_message_time).seconds < 1:
-                await asyncio.sleep(1)
-            
-            # Отправляем сообщение
-            if file_path and os.path.exists(file_path):
-                await client.send_document(chat_id, file_path, caption=message)
-            else:
-                await client.send_message(chat_id, message)
-            
-            # Обновляем статистику
-            account.messages_sent_today += 1
-            account.messages_sent_hour += 1
-            account.last_message_time = now
-            db.commit()
-            db.close()
-            
-            return {"status": "success"}
+            try:
+                account = db.query(Account).filter(Account.id == account_id).first()
+                if not account:
+                    return {"status": "error", "message": "Аккаунт не найден"}
+                
+                now = datetime.utcnow()
+                if account.last_message_time and (now - account.last_message_time).seconds < 1:
+                    await asyncio.sleep(1)
+                
+                # Очищаем chat_id от лишних символов
+                clean_chat_id = chat_id.strip()
+                if clean_chat_id.startswith('@'):
+                    clean_chat_id = clean_chat_id[1:]
+                
+                print(f"Sending message to clean_chat_id: {clean_chat_id}")
+                
+                # Отправляем сообщение
+                if file_path and os.path.exists(file_path):
+                    result = await client.send_document(clean_chat_id, file_path, caption=message)
+                else:
+                    result = await client.send_message(clean_chat_id, message)
+                
+                print(f"Message sent successfully: {result}")
+                
+                # Обновляем статистику
+                account.messages_sent_today += 1
+                account.messages_sent_hour += 1
+                account.last_message_time = now
+                db.commit()
+                
+                return {"status": "success", "message_id": result.id if hasattr(result, 'id') else None}
+                
+            finally:
+                db.close()
             
         except FloodWait as e:
+            print(f"FloodWait error: {e.value} seconds")
             await asyncio.sleep(e.value)
             return {"status": "flood_wait", "seconds": e.value}
         except Exception as e:
+            print(f"Error sending message: {str(e)}")
             return {"status": "error", "message": str(e)}
 
 # Глобальный экземпляр менеджера

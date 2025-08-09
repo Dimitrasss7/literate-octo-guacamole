@@ -92,6 +92,8 @@ class MessageSender:
                     if not self._check_account_limits(account):
                         continue
                     
+                    print(f"Sending message to {recipient} via account {account.id}")
+                    
                     # Отправляем сообщение
                     result = await telegram_manager.send_message(
                         account.id,
@@ -99,6 +101,8 @@ class MessageSender:
                         message,
                         campaign.attachment_path
                     )
+                    
+                    print(f"Send result: {result}")
                     
                     # Логируем результат
                     self._log_send_result(
@@ -108,6 +112,9 @@ class MessageSender:
                     
                     if result["status"] == "success":
                         total_sent += 1
+                        print(f"Message sent successfully to {recipient}")
+                    else:
+                        print(f"Failed to send message to {recipient}: {result.get('message', 'Unknown error')}")
                     
                     # Задержка между отправками
                     await asyncio.sleep(campaign.delay_seconds)
@@ -130,24 +137,32 @@ class MessageSender:
             try:
                 recipients["channel"] = json.loads(campaign.channels_list)
             except:
-                recipients["channel"] = campaign.channels_list.split("\n")
+                recipients["channel"] = [line.strip() for line in campaign.channels_list.split("\n") if line.strip()]
         
         if campaign.groups_list:
             try:
                 recipients["group"] = json.loads(campaign.groups_list)
             except:
-                recipients["group"] = campaign.groups_list.split("\n")
+                recipients["group"] = [line.strip() for line in campaign.groups_list.split("\n") if line.strip()]
         
         if campaign.private_list:
             try:
                 recipients["private"] = json.loads(campaign.private_list)
             except:
-                recipients["private"] = campaign.private_list.split("\n")
+                recipients["private"] = [line.strip() for line in campaign.private_list.split("\n") if line.strip()]
         
-        # Убираем пустые строки
+        # Убираем пустые строки и очищаем от лишних символов
         for key in recipients:
-            recipients[key] = [r.strip() for r in recipients[key] if r.strip()]
+            cleaned_recipients = []
+            for r in recipients[key]:
+                if r.strip():
+                    # Убираем @ если есть, и другие лишние символы
+                    clean_r = r.strip().replace('@', '').replace(' ', '')
+                    if clean_r:
+                        cleaned_recipients.append(clean_r)
+            recipients[key] = cleaned_recipients
         
+        print(f"Parsed recipients: {recipients}")
         return recipients
     
     def _get_message_for_type(self, campaign: Campaign, recipient_type: str) -> str:

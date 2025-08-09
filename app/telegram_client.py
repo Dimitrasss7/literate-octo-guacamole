@@ -99,7 +99,7 @@ class TelegramManager:
                 await client.connect()
 
             # Подтверждаем код
-            await client.sign_in(phone, code)
+            await client.sign_in(phone, phone_code_hash, code)
 
             # Получаем информацию о пользователе
             me = await client.get_me()

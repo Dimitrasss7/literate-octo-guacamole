@@ -306,6 +306,21 @@ async def delete_account(account_id: int, db: Session = Depends(get_db)):
         return JSONResponse({"status": "success"})
     return JSONResponse({"status": "error", "message": "Аккаунт не найден"})
 
+@app.get("/api/accounts")
+async def get_accounts_api(db: Session = Depends(get_db)):
+    """API для получения списка аккаунтов"""
+    accounts = db.query(Account).all()
+    accounts_data = []
+    for account in accounts:
+        accounts_data.append({
+            "id": account.id,
+            "name": account.name,
+            "phone": account.phone,
+            "is_active": account.is_active,
+            "status": account.status
+        })
+    return JSONResponse(accounts_data)
+
 @app.get("/api/stats")
 async def get_stats(db: Session = Depends(get_db)):
     """API для получения статистики"""

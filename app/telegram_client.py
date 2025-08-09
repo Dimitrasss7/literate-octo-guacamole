@@ -645,7 +645,14 @@ class TelegramManager:
                             )
                             print(f"✓ Текстовое сообщение отправлено немедленно")
                 except Exception as send_error:
-                    print(f"Ошибка при отправке: {send_error}")
+                    error_str = str(send_error)
+                    print(f"Ошибка при отправке: {error_str}")
+                    
+                    # Обработка специфической ошибки is_premium
+                    if "'NoneType' object has no attribute 'is_premium'" in error_str:
+                        print(f"Пропускаем пользователя {recipient} из-за проблем с получением данных профиля")
+                        return {"status": "error", "message": f"Пользователь {recipient} недоступен или заблокирован"}
+                    
                     raise send_error
 
                 # Обновляем статистику аккаунта
@@ -698,6 +705,8 @@ class TelegramManager:
                     return {"status": "error", "message": f"Пользователь {recipient} заблокировал бота"}
                 elif "CHAT_WRITE_FORBIDDEN" in error_msg:
                     return {"status": "error", "message": f"Нет прав для записи в чат {recipient}"}
+                elif "'NoneType' object has no attribute 'is_premium'" in error_msg:
+                    return {"status": "error", "message": f"Пользователь {recipient} недоступен или заблокирован"}
                 else:
                     return {"status": "error", "message": error_msg}
 

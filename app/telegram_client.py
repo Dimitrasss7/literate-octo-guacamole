@@ -245,7 +245,7 @@ class TelegramManager:
 
                 # Ищем файл сессии
                 phone_clean = account.phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')
-                
+
                 # Список возможных имен сессий
                 possible_names = [
                     f"session_{phone_clean}",
@@ -285,12 +285,12 @@ class TelegramManager:
                 try:
                     me = await client.get_me()
                     print(f"✓ Клиент для аккаунта {account_id} успешно подключен: {me.first_name}")
-                    
+
                     # Обновляем статус в БД
                     account.status = "online"
                     account.last_activity = datetime.utcnow()
                     db.commit()
-                    
+
                     return client
                 except Exception as auth_error:
                     print(f"Ошибка авторизации клиента {account_id}: {auth_error}")
@@ -362,7 +362,7 @@ class TelegramManager:
                 print(f"✓ Найдено {len(contacts)} контактов из {dialog_count} диалогов")
 
                 # Закрываем клиент
-                await client.stop()
+                await client.disconnect()
 
                 return {
                     "status": "success",
@@ -372,7 +372,7 @@ class TelegramManager:
 
             except Exception as e:
                 print(f"Ошибка получения диалогов: {str(e)}")
-                await client.stop()
+                await client.disconnect()
                 return {"status": "error", "message": f"Ошибка получения диалогов: {str(e)}"}
 
         except Exception as e:
@@ -424,13 +424,13 @@ class TelegramManager:
                 print(f"✓ Найдено: {len(chats['private'])} приватных, {len(chats['groups'])} групп, {len(chats['channels'])} каналов")
 
                 # Закрываем клиент
-                await client.stop()
+                await client.disconnect()
 
                 return {"status": "success", "chats": chats}
 
             except Exception as e:
                 print(f"Ошибка получения чатов: {str(e)}")
-                await client.stop()
+                await client.disconnect()
                 return {"status": "error", "message": str(e)}
 
         except Exception as e:

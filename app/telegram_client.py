@@ -89,8 +89,9 @@ class TelegramManager:
                     session_path,
                     api_id=API_ID,
                     api_hash=API_HASH,
-                    phone_number=phone,
-                    proxy=self._parse_proxy(proxy) if proxy else None
+                    proxy=self._parse_proxy(proxy) if proxy else None,
+                    no_updates=True,
+                    takeout=False
                 )
                 await client.connect()
 
@@ -139,8 +140,9 @@ class TelegramManager:
                     session_path,
                     api_id=API_ID,
                     api_hash=API_HASH,
-                    phone_number=phone,
-                    proxy=self._parse_proxy(proxy) if proxy else None
+                    proxy=self._parse_proxy(proxy) if proxy else None,
+                    no_updates=True,
+                    takeout=False
                 )
                 await client.connect()
 

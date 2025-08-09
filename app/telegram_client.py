@@ -560,11 +560,13 @@ class TelegramManager:
 
     async def send_message(self, account_id: int, recipient: str, message: str, file_path: Optional[str] = None, 
                           schedule_seconds: int = 0) -> Dict:
-        """Отправка сообщения через указанный аккаунт с возможностью отложенной отправки"""
-        print(f"Отправка сообщения в {recipient} от аккаунта {account_id}")
+        """Отправка сообщения через указанный аккаунт с использованием встроенного планировщика Telegram"""
+        print(f"Планирование сообщения в {recipient} от аккаунта {account_id}")
         
         if schedule_seconds > 0:
-            print(f"Сообщение будет отправлено через {schedule_seconds} секунд используя Telegram scheduling")
+            print(f"Сообщение будет запланировано в Telegram на отправку через {schedule_seconds} секунд")
+        else:
+            print(f"Сообщение будет отправлено немедленно")
 
         try:
             # Получаем клиент для аккаунта
@@ -589,40 +591,39 @@ class TelegramManager:
                 if not recipient.startswith('@') and not recipient.startswith('+') and not recipient.isdigit() and not recipient.startswith('-'):
                     recipient = f"@{recipient}"
 
-                # Рассчитываем время отправки
-                schedule_date = None
+                # Всегда используем встроенный планировщик Telegram
+                from datetime import datetime, timedelta
+                
+                # Рассчитываем время отправки через Telegram планировщик
                 if schedule_seconds > 0:
-                    from datetime import datetime, timedelta
                     schedule_date = datetime.utcnow() + timedelta(seconds=schedule_seconds)
-                    print(f"Запланировано на: {schedule_date}")
+                    print(f"Сообщение будет запланировано в Telegram на: {schedule_date}")
+                else:
+                    # Даже для немедленной отправки используем минимальную задержку через планировщик
+                    schedule_date = datetime.utcnow() + timedelta(seconds=1)
+                    print(f"Сообщение будет отправлено через Telegram планировщик на: {schedule_date}")
 
-                # Отправляем сообщение
+                # Отправляем сообщение через встроенный планировщик Telegram
                 sent_message = None
                 try:
                     if file_path and os.path.exists(file_path):
-                        print(f"Отправка файла: {file_path}")
-                        # Отправляем с файлом
+                        print(f"Планирование отправки файла: {file_path}")
+                        # Отправляем с файлом через планировщик
                         sent_message = await client.send_document(
                             chat_id=recipient,
                             document=file_path,
                             caption=message if message else None,
                             schedule_date=schedule_date
                         )
-                        if schedule_date:
-                            print(f"Файл запланирован к отправке на {schedule_date}")
-                        else:
-                            print(f"Файл отправлен успешно")
+                        print(f"Файл успешно запланирован к отправке через Telegram на {schedule_date}")
                     else:
-                        # Отправляем только текст
+                        # Отправляем только текст через планировщик
                         sent_message = await client.send_message(
                             chat_id=recipient,
                             text=message,
                             schedule_date=schedule_date
                         )
-                        if schedule_date:
-                            print(f"Текстовое сообщение запланировано к отправке на {schedule_date}")
-                        else:
-                            print(f"Текстовое сообщение отправлено успешно")
+                        print(f"Текстовое сообщение успешно запланировано через Telegram на {schedule_date}")
                 except Exception as send_error:
                     print(f"Ошибка при отправке: {send_error}")
                     raise send_error

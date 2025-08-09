@@ -270,13 +270,23 @@ class TelegramManager:
         if account_id in self.clients:
             client = self.clients[account_id]
             try:
-                # Быстрая проверка подключения без полного запроса
+                # Быстрая проверка подключения
                 if client.is_connected:
-                    return client
+                    # Проверяем, что клиент действительно работает
+                    try:
+                        await client.get_me()
+                        return client
+                    except:
+                        # Клиент не работает, удаляем
+                        print(f"Removing non-working client for account {account_id}")
+                        try:
+                            await client.stop()
+                        except:
+                            pass
+                        del self.clients[account_id]
                 else:
-                    # Пробуем переподключиться
-                    await client.start()
-                    return client
+                    # Клиент не подключен, удаляем
+                    del self.clients[account_id]
             except:
                 # Если клиент не работает, удаляем его
                 print(f"Removing failed client for account {account_id}")
@@ -294,98 +304,64 @@ class TelegramManager:
                 print(f"Account {account_id} not found or not active")
                 return None
 
-            print(f"Creating client for account {account_id}")
+            print(f"Creating client for account {account_id} (phone: {account.phone})")
 
-            try:
-                # Пробуем расшифровать сессию
-                try:
-                    session_data = self.cipher.decrypt(account.session_data.encode())
-                    print(f"Session data decrypted successfully, size: {len(session_data)} bytes")
-                except Exception as decrypt_error:
-                    print(f"Failed to decrypt session with current cipher: {str(decrypt_error)}")
-                    # Пробуем использовать данные как есть (если они не зашифрованы)
-                    try:
-                        import base64
-                        session_data = base64.b64decode(account.session_data.encode())
-                        print(f"Session data decoded from base64, size: {len(session_data)} bytes")
-                    except:
-                        # Если это текстовые данные, конвертируем в байты
-                        session_data = account.session_data.encode()
-                        print(f"Using session data as text bytes, size: {len(session_data)} bytes")
+            # Ищем оригинальный файл сессии по номеру телефона
+            phone_clean = account.phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')
+            original_session_file = None
+            
+            # Ищем файл сессии по разным паттернам
+            session_patterns = [
+                f"session_{phone_clean}.session",
+                f"session_{account.phone}.session"
+            ]
+            
+            for pattern in session_patterns:
+                potential_file = os.path.join(SESSIONS_DIR, pattern)
+                if os.path.exists(potential_file):
+                    original_session_file = potential_file
+                    print(f"Found session file by pattern: {potential_file}")
+                    break
 
-                # Создаем временный файл сессии
-                session_name = f"temp_session_{account_id}"
-                session_path = os.path.join(SESSIONS_DIR, session_name)
+            # Если не найден точный файл, ищем любой подходящий
+            if not original_session_file:
+                print(f"Searching for session files containing: {phone_clean}")
+                for file in os.listdir(SESSIONS_DIR):
+                    if file.endswith('.session') and not file.startswith('temp_session_'):
+                        # Проверяем, подходит ли этот файл для нашего номера
+                        if phone_clean in file:
+                            original_session_file = os.path.join(SESSIONS_DIR, file)
+                            print(f"Found matching session file: {original_session_file}")
+                            break
 
-                # Удаляем старые временные файлы если есть
-                temp_session_file = f"{session_path}.session"
-                if os.path.exists(temp_session_file):
-                    try:
-                        os.remove(temp_session_file)
-                    except:
-                        pass
+            if not original_session_file:
+                print(f"No session file found for account {account_id} (phone: {account.phone})")
+                print(f"Available session files: {[f for f in os.listdir(SESSIONS_DIR) if f.endswith('.session')]}")
+                account.status = "error"
+                db.commit()
+                return None
 
-                with open(temp_session_file, "wb") as f:
-                    f.write(session_data)
+            # Используем найденный файл сессии напрямую
+            session_path = original_session_file.replace('.session', '')
+            print(f"Using session path: {session_path}")
 
-                print(f"Session file created: {temp_session_file}")
-
-            except Exception as session_error:
-                print(f"Failed to create session file: {str(session_error)}")
-                # Пробуем найти и использовать оригинальные файлы сессий
-                original_session_file = None
-                phone_clean = account.phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')
-
-                # Ищем файл сессии по разным паттернам
-                session_patterns = [
-                    f"session_{phone_clean}.session",
-                    f"session_{account.phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')}.session"
-                ]
-                
-                for pattern in session_patterns:
-                    potential_file = os.path.join(SESSIONS_DIR, pattern)
-                    if os.path.exists(potential_file):
-                        original_session_file = potential_file
-                        break
-
-                # Если не найден точный файл, ищем любой подходящий
-                if not original_session_file:
-                    for file in os.listdir(SESSIONS_DIR):
-                        if file.endswith('.session') and not file.startswith('temp_session_'):
-                            # Проверяем, подходит ли этот файл для нашего номера
-                            if phone_clean in file or account.phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '') in file:
-                                original_session_file = os.path.join(SESSIONS_DIR, file)
-                                break
-
-                if original_session_file and os.path.exists(original_session_file):
-                    print(f"Using original session file: {original_session_file}")
-                    session_name = f"account_{account_id}_session"
-                    session_path = os.path.join(SESSIONS_DIR, session_name)
-
-                    # Используем оригинальный файл напрямую
-                    session_path = original_session_file.replace('.session', '')
-                    print(f"Using original session path: {session_path}")
-                else:
-                    raise Exception(f"Не удалось найти файл сессии для аккаунта {account_id}")
-
-            # Создаем клиент с настройками для избежания ошибки readonly database
+            # Создаем клиент без дополнительных настроек, которые могут вызывать проблемы
             client = Client(
                 session_path,
                 api_id=API_ID,
                 api_hash=API_HASH,
                 proxy=self._parse_proxy(account.proxy) if account.proxy else None,
-                sleep_threshold=60,
-                in_memory=True,  # Используем in-memory storage чтобы избежать проблем с readonly database
-                no_updates=True  # Отключаем получение обновлений для ускорения
+                no_updates=True,  # Отключаем получение обновлений
+                takeout=False  # Отключаем takeout режим
             )
 
             try:
+                print(f"Starting client for account {account_id}")
                 await client.start()
-                print(f"Client started for account {account_id}")
-
+                
                 # Проверяем, что клиент работает
                 me = await client.get_me()
-                print(f"Client verified for {me.first_name}")
+                print(f"Client verified for {me.first_name} (ID: {me.id})")
 
                 self.clients[account_id] = client
 
@@ -397,52 +373,18 @@ class TelegramManager:
                 return client
 
             except Exception as start_error:
-                print(f"Error starting client: {str(start_error)}")
+                print(f"Error starting client for account {account_id}: {str(start_error)}")
                 
-                # Если ошибка связана с блокировкой базы данных или клиент уже подключен
-                if "database is locked" in str(start_error) or "already connected" in str(start_error):
-                    # Ждем немного и пробуем еще раз
-                    await asyncio.sleep(2)
-                    try:
-                        # Проверяем, что клиент работает
-                        me = await client.get_me()
-                        print(f"Client verified after retry for {me.first_name}")
-                        self.clients[account_id] = client
-                        account.status = "online"
-                        account.last_activity = datetime.utcnow()
-                        db.commit()
-                        return client
-                    except:
-                        pass
+                # Обновляем статус на ошибку
+                account.status = "error"
+                db.commit()
                 
-                # Пробуем удалить временный файл сессии и создать заново
                 try:
-                    temp_session_file = f"{session_path}.session"
-                    if os.path.exists(temp_session_file):
-                        os.remove(temp_session_file)
-                    # Создаем заново из исходной сессии
-                    original_session_file = None
-                    for file in os.listdir(SESSIONS_DIR):
-                        if file.startswith(f"session_{account.phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')}"):
-                            original_session_file = os.path.join(SESSIONS_DIR, file)
-                            break
-
-                    if original_session_file and os.path.exists(original_session_file):
-                        print(f"Trying to use original session file: {original_session_file}")
-                        import shutil
-                        shutil.copy2(original_session_file, temp_session_file)
-                        await client.start()
-                        me = await client.get_me()
-                        print(f"Client started with original session for {me.first_name}")
-                        self.clients[account_id] = client
-                        account.status = "online"
-                        account.last_activity = datetime.utcnow()
-                        db.commit()
-                        return client
-                except Exception as fallback_error:
-                    print(f"Fallback also failed: {str(fallback_error)}")
-
-                raise start_error
+                    await client.stop()
+                except:
+                    pass
+                
+                return None
 
         except Exception as e:
             print(f"Error getting client for account {account_id}: {str(e)}")
@@ -463,59 +405,27 @@ class TelegramManager:
             contacts = []
             
             try:
-                print(f"Getting contacts for account {account_id} (fast method)")
+                print(f"Getting contacts for account {account_id}")
                 
-                # Сначала пробуем быстрый метод - прямой API контактов
-                try:
-                    contacts_api = await client.get_contacts()
-                    print(f"Got {len(contacts_api) if contacts_api else 0} contacts from API")
-                    
-                    if contacts_api:
-                        for contact in contacts_api:
-                            try:
-                                contact_info = {
-                                    "id": contact.id,
-                                    "username": getattr(contact, 'username', None),
-                                    "first_name": getattr(contact, 'first_name', None),
-                                    "last_name": getattr(contact, 'last_name', None),
-                                    "phone": getattr(contact, 'phone_number', None),
-                                    "display_name": ""
-                                }
-                                
-                                # Формируем отображаемое имя
-                                if contact_info["first_name"]:
-                                    contact_info["display_name"] = contact_info["first_name"]
-                                    if contact_info["last_name"]:
-                                        contact_info["display_name"] += f" {contact_info['last_name']}"
-                                elif contact_info["username"]:
-                                    contact_info["display_name"] = f"@{contact_info['username']}"
-                                else:
-                                    contact_info["display_name"] = f"User {contact_info['id']}"
-                                
-                                contacts.append(contact_info)
-                            except Exception as contact_error:
-                                print(f"Error processing contact: {contact_error}")
-                                continue
-                        
-                        print(f"Processed {len(contacts)} contacts from API")
-                        return {"status": "success", "contacts": contacts}
-                
-                except Exception as api_error:
-                    print(f"API contacts method failed: {api_error}")
-                
-                # Если API не сработал, используем диалоги, но с меньшим лимитом
-                print(f"Fallback to dialogs method for account {account_id}")
+                # Получаем только диалоги с лимитом для ускорения
                 dialog_count = 0
-                async for dialog in client.get_dialogs(limit=50):  # Уменьшили лимит для скорости
+                processed_count = 0
+                
+                # Используем более агрессивный лимит для быстроты
+                async for dialog in client.get_dialogs(limit=30):
                     try:
-                        if dialog_count >= 50:  # Ограничиваем количество обрабатываемых диалогов
+                        dialog_count += 1
+                        
+                        # Прерываем если обработали достаточно
+                        if processed_count >= 20:
                             break
                             
                         # Только приватные чаты (не боты, не сохраненные сообщения)
-                        if (dialog.chat.type == "private" and 
+                        if (dialog.chat.type.value == "private" and 
                             not dialog.chat.is_self and 
                             not dialog.chat.is_bot and
-                            not dialog.chat.is_deleted):
+                            not dialog.chat.is_deleted and
+                            dialog.chat.id != 777000):  # Исключаем Telegram сервис
                             
                             contact_info = {
                                 "id": dialog.chat.id,
@@ -537,18 +447,17 @@ class TelegramManager:
                                 contact_info["display_name"] = f"User {contact_info['id']}"
                             
                             contacts.append(contact_info)
-                        
-                        dialog_count += 1
+                            processed_count += 1
                             
                     except Exception as dialog_error:
                         print(f"Error processing dialog {dialog_count}: {dialog_error}")
                         continue
 
-                print(f"Found {len(contacts)} contacts from dialogs for account {account_id}")
+                print(f"Found {len(contacts)} contacts from {dialog_count} dialogs for account {account_id}")
                 return {"status": "success", "contacts": contacts}
                 
             except Exception as method_error:
-                print(f"Error in contacts methods: {method_error}")
+                print(f"Error getting contacts: {method_error}")
                 return {"status": "error", "message": f"Ошибка получения контактов: {str(method_error)}"}
 
         except Exception as e:
@@ -565,24 +474,30 @@ class TelegramManager:
             chats = {"groups": [], "channels": [], "private": []}
             
             try:
-                # Получаем все диалоги пользователя
+                # Получаем диалоги с лимитом для ускорения
                 dialog_count = 0
-                async for dialog in client.get_dialogs():
+                async for dialog in client.get_dialogs(limit=50):
                     try:
                         dialog_count += 1
+                        
+                        # Прерываем если достаточно
+                        if dialog_count > 50:
+                            break
+                            
                         chat_info = {
                             "id": dialog.chat.id,
                             "title": dialog.chat.title or f"{dialog.chat.first_name or ''} {dialog.chat.last_name or ''}".strip(),
-                            "username": dialog.chat.username,
-                            "type": dialog.chat.type
+                            "username": getattr(dialog.chat, 'username', None),
+                            "type": dialog.chat.type.value if hasattr(dialog.chat.type, 'value') else str(dialog.chat.type)
                         }
                         
-                        if dialog.chat.type == "private":
+                        if chat_info["type"] == "private":
                             chats["private"].append(chat_info)
-                        elif dialog.chat.type == "group" or dialog.chat.type == "supergroup":
+                        elif chat_info["type"] in ["group", "supergroup"]:
                             chats["groups"].append(chat_info)
-                        elif dialog.chat.type == "channel":
+                        elif chat_info["type"] == "channel":
                             chats["channels"].append(chat_info)
+                            
                     except Exception as dialog_error:
                         print(f"Error processing dialog {dialog_count}: {dialog_error}")
                         continue

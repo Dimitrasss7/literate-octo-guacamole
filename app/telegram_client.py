@@ -327,13 +327,16 @@ class TelegramManager:
                 account.last_activity = datetime.utcnow()
                 db.commit()
 
-                self.clients[account_id] = client # Сохраняем клиент в кеш
+                self.clients[account_id] = client
                 return client
 
             except Exception as auth_error:
                 print(f"Ошибка авторизации клиента {account_id}: {auth_error}")
-                if client.is_connected:
-                    await client.stop()
+                try:
+                    if client.is_connected:
+                        await client.disconnect()
+                except:
+                    pass
                 return None
 
         except Exception as e:
@@ -565,9 +568,17 @@ class TelegramManager:
             if not client:
                 return {"status": "error", "message": "Клиент не найден"}
 
-            # Проверяем, что клиент подключен
-            if not client.is_connected:
-                await client.connect()
+            # Проверяем подключение клиента
+            try:
+                if not client.is_connected:
+                    await client.connect()
+                
+                # Проверяем, что клиент действительно авторизован
+                me = await client.get_me()
+                print(f"Отправка от: {me.first_name}")
+            except Exception as conn_error:
+                print(f"Ошибка подключения клиента: {conn_error}")
+                return {"status": "error", "message": f"Ошибка подключения: {conn_error}"}
 
             try:
                 # Если это username, добавляем @ если его нет
@@ -592,23 +603,28 @@ class TelegramManager:
                 # Обновляем статистику аккаунта
                 await self._update_account_stats(account_id)
 
-                # Безопасное получение chat_id
+                # Безопасное получение информации о сообщении
+                message_id = None
                 chat_id = None
-                if hasattr(sent_message, 'chat') and sent_message.chat is not None:
-                    chat_id = getattr(sent_message.chat, 'id', None)
-                elif hasattr(sent_message, 'peer_id'):
-                    # Если chat не доступен, используем peer_id
-                    peer_id = sent_message.peer_id
-                    if hasattr(peer_id, 'user_id'):
-                        chat_id = peer_id.user_id
-                    elif hasattr(peer_id, 'chat_id'):
-                        chat_id = peer_id.chat_id
-                    elif hasattr(peer_id, 'channel_id'):
-                        chat_id = peer_id.channel_id
+                
+                if sent_message:
+                    message_id = getattr(sent_message, 'id', None)
+                    
+                    # Пытаемся получить chat_id разными способами
+                    if hasattr(sent_message, 'chat') and sent_message.chat is not None:
+                        chat_id = getattr(sent_message.chat, 'id', None)
+                    elif hasattr(sent_message, 'peer_id') and sent_message.peer_id is not None:
+                        peer_id = sent_message.peer_id
+                        if hasattr(peer_id, 'user_id'):
+                            chat_id = peer_id.user_id
+                        elif hasattr(peer_id, 'chat_id'):
+                            chat_id = peer_id.chat_id
+                        elif hasattr(peer_id, 'channel_id'):
+                            chat_id = peer_id.channel_id
 
                 return {
                     "status": "success",
-                    "message_id": sent_message.id if hasattr(sent_message, 'id') else None,
+                    "message_id": message_id,
                     "chat_id": chat_id
                 }
 

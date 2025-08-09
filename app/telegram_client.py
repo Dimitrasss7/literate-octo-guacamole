@@ -329,32 +329,56 @@ class TelegramManager:
                 session_name = f"temp_session_{account_id}"
                 session_path = os.path.join(SESSIONS_DIR, session_name)
 
-                with open(f"{session_path}.session", "wb") as f:
+                # Удаляем старые временные файлы если есть
+                temp_session_file = f"{session_path}.session"
+                if os.path.exists(temp_session_file):
+                    try:
+                        os.remove(temp_session_file)
+                    except:
+                        pass
+
+                with open(temp_session_file, "wb") as f:
                     f.write(session_data)
 
-                print(f"Session file created: {session_path}.session")
+                print(f"Session file created: {temp_session_file}")
 
             except Exception as session_error:
                 print(f"Failed to create session file: {str(session_error)}")
-                # Пробуем использовать оригинальные файлы сессий
+                # Пробуем найти и использовать оригинальные файлы сессий
                 original_session_file = None
                 phone_clean = account.phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')
 
-                for file in os.listdir(SESSIONS_DIR):
-                    if file.startswith(f"session_{phone_clean}") and file.endswith('.session'):
-                        original_session_file = os.path.join(SESSIONS_DIR, file)
+                # Ищем файл сессии по разным паттернам
+                session_patterns = [
+                    f"session_{phone_clean}.session",
+                    f"session_{account.phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')}.session"
+                ]
+                
+                for pattern in session_patterns:
+                    potential_file = os.path.join(SESSIONS_DIR, pattern)
+                    if os.path.exists(potential_file):
+                        original_session_file = potential_file
                         break
+
+                # Если не найден точный файл, ищем любой подходящий
+                if not original_session_file:
+                    for file in os.listdir(SESSIONS_DIR):
+                        if file.endswith('.session') and not file.startswith('temp_session_'):
+                            # Проверяем, подходит ли этот файл для нашего номера
+                            if phone_clean in file or account.phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '') in file:
+                                original_session_file = os.path.join(SESSIONS_DIR, file)
+                                break
 
                 if original_session_file and os.path.exists(original_session_file):
                     print(f"Using original session file: {original_session_file}")
-                    session_name = f"temp_session_{account_id}"
+                    session_name = f"account_{account_id}_session"
                     session_path = os.path.join(SESSIONS_DIR, session_name)
 
-                    import shutil
-                    shutil.copy2(original_session_file, f"{session_path}.session")
-                    print(f"Copied original session to: {session_path}.session")
+                    # Используем оригинальный файл напрямую
+                    session_path = original_session_file.replace('.session', '')
+                    print(f"Using original session path: {session_path}")
                 else:
-                    raise Exception(f"Не удалось создать файл сессии и не найден оригинальный файл")
+                    raise Exception(f"Не удалось найти файл сессии для аккаунта {account_id}")
 
             # Создаем клиент
             client = Client(
@@ -442,84 +466,116 @@ class TelegramManager:
     async def get_user_contacts(self, account_id: int) -> Dict:
         """Получение всех контактов пользователя"""
         try:
-            client = await self.get_client(account_id)
+            # Проверяем, есть ли уже активный клиент
+            if account_id in self.clients:
+                try:
+                    client = self.clients[account_id]
+                    # Проверяем, что клиент работает
+                    await client.get_me()
+                    print(f"Using existing client for account {account_id}")
+                except:
+                    # Клиент не работает, удаляем его
+                    del self.clients[account_id]
+                    client = None
+            else:
+                client = None
+
+            # Если нет активного клиента, создаем новый
             if not client:
-                return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
+                client = await self.get_client(account_id)
+                if not client:
+                    return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
 
             contacts = []
             
             try:
-                # Получаем контакты через метод get_contacts
-                contacts_result = await client.get_contacts()
-                print(f"get_contacts returned: {type(contacts_result)}")
+                print(f"Attempting to get contacts for account {account_id}")
                 
-                if hasattr(contacts_result, '__iter__'):
-                    for contact in contacts_result:
-                        try:
-                            contact_info = {
-                                "id": contact.id,
-                                "username": contact.username,
-                                "first_name": contact.first_name,
-                                "last_name": contact.last_name,
-                                "phone": getattr(contact, 'phone_number', None)
-                            }
-                            contacts.append(contact_info)
-                        except Exception as contact_error:
-                            print(f"Error processing contact: {contact_error}")
-                            continue
-                    
-                print(f"Found {len(contacts)} contacts via get_contacts for account {account_id}")
-                
-            except Exception as contacts_error:
-                print(f"Error getting contacts via get_contacts: {contacts_error}")
-                
-                # Fallback 1: пробуем iter_contacts как async for
+                # Метод 1: Получаем контакты через get_contacts
                 try:
-                    contact_count = 0
-                    async for contact in client.iter_contacts():
-                        try:
-                            contact_info = {
-                                "id": contact.id,
-                                "username": contact.username,
-                                "first_name": contact.first_name,
-                                "last_name": contact.last_name,
-                                "phone": getattr(contact, 'phone_number', None)
-                            }
-                            contacts.append(contact_info)
-                            contact_count += 1
-                        except Exception as contact_error:
-                            print(f"Error processing contact via iter_contacts: {contact_error}")
-                            continue
-                    print(f"Found {contact_count} contacts via iter_contacts for account {account_id}")
-                except Exception as iter_error:
-                    print(f"Error getting contacts via iter_contacts: {iter_error}")
+                    contacts_result = await client.get_contacts()
+                    print(f"get_contacts returned: {type(contacts_result)}, length: {len(contacts_result) if hasattr(contacts_result, '__len__') else 'unknown'}")
+                    
+                    if hasattr(contacts_result, '__iter__'):
+                        for contact in contacts_result:
+                            try:
+                                contact_info = {
+                                    "id": contact.id,
+                                    "username": getattr(contact, 'username', None),
+                                    "first_name": getattr(contact, 'first_name', None),
+                                    "last_name": getattr(contact, 'last_name', None),
+                                    "phone": getattr(contact, 'phone_number', None)
+                                }
+                                contacts.append(contact_info)
+                            except Exception as contact_error:
+                                print(f"Error processing contact: {contact_error}")
+                                continue
+                        
+                    print(f"Found {len(contacts)} contacts via get_contacts for account {account_id}")
+                    
+                except Exception as contacts_error:
+                    print(f"Error getting contacts via get_contacts: {contacts_error}")
                 
-                # Fallback 2: получаем приватные диалоги
-                if len(contacts) == 0:
+                # Метод 2: Если контактов мало, пробуем получить приватные диалоги
+                if len(contacts) < 5:  # Если контактов меньше 5, добавляем из диалогов
                     try:
-                        async for dialog in client.get_dialogs():
-                            if dialog.chat.type in ["private"] and not dialog.chat.is_self:
+                        print(f"Getting private dialogs as contacts for account {account_id}")
+                        dialog_count = 0
+                        async for dialog in client.get_dialogs(limit=100):
+                            if dialog.chat.type == "private" and not dialog.chat.is_self and not dialog.chat.is_bot:
                                 try:
-                                    contact_info = {
-                                        "id": dialog.chat.id,
-                                        "username": dialog.chat.username,
-                                        "first_name": dialog.chat.first_name,
-                                        "last_name": dialog.chat.last_name,
-                                        "phone": getattr(dialog.chat, 'phone_number', None)
-                                    }
-                                    contacts.append(contact_info)
+                                    # Проверяем, не добавили ли уже этот контакт
+                                    already_added = any(c['id'] == dialog.chat.id for c in contacts)
+                                    if not already_added:
+                                        contact_info = {
+                                            "id": dialog.chat.id,
+                                            "username": getattr(dialog.chat, 'username', None),
+                                            "first_name": getattr(dialog.chat, 'first_name', None),
+                                            "last_name": getattr(dialog.chat, 'last_name', None),
+                                            "phone": getattr(dialog.chat, 'phone_number', None)
+                                        }
+                                        contacts.append(contact_info)
+                                        dialog_count += 1
                                 except Exception as dialog_error:
                                     print(f"Error processing dialog: {dialog_error}")
                                     continue
                                     
-                        print(f"Found {len(contacts)} private dialogs for account {account_id}")
+                        print(f"Added {dialog_count} private dialogs as contacts for account {account_id}")
                     except Exception as dialogs_error:
                         print(f"Error getting dialogs: {dialogs_error}")
 
-            return {"status": "success", "contacts": contacts}
+                # Метод 3: Если все еще мало контактов, пробуем iter_contacts
+                if len(contacts) == 0:
+                    try:
+                        print(f"Trying iter_contacts for account {account_id}")
+                        contact_count = 0
+                        async for contact in client.iter_contacts():
+                            try:
+                                contact_info = {
+                                    "id": contact.id,
+                                    "username": getattr(contact, 'username', None),
+                                    "first_name": getattr(contact, 'first_name', None),
+                                    "last_name": getattr(contact, 'last_name', None),
+                                    "phone": getattr(contact, 'phone_number', None)
+                                }
+                                contacts.append(contact_info)
+                                contact_count += 1
+                            except Exception as contact_error:
+                                print(f"Error processing contact via iter_contacts: {contact_error}")
+                                continue
+                        print(f"Found {contact_count} contacts via iter_contacts for account {account_id}")
+                    except Exception as iter_error:
+                        print(f"Error getting contacts via iter_contacts: {iter_error}")
+
+                print(f"Total contacts found for account {account_id}: {len(contacts)}")
+                return {"status": "success", "contacts": contacts}
+                
+            except Exception as method_error:
+                print(f"Error in contacts methods: {method_error}")
+                return {"status": "success", "contacts": []}
 
         except Exception as e:
-            print(f"Error getting contacts: {str(e)}")
+            print(f"Error getting contacts for account {account_id}: {str(e)}")
             return {"status": "error", "message": str(e)}
 
     async def get_user_chats(self, account_id: int) -> Dict:

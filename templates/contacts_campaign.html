@@ -40,7 +40,17 @@
                         <small class="form-text text-muted">Оставьте пустым для немедленного запуска. Максимум 24 часа (1440 минут)</small>
                     </div>
 
-                    
+                    <div class="mb-3">
+                        <label for="attachmentFile" class="form-label">Прикрепить файл (опционально)</label>
+                        <input type="file" class="form-control" id="attachmentFile" accept="*/*">
+                        <small class="form-text text-muted">Поддерживаются любые файлы: изображения, видео, документы, APK и другие. Максимум 50 МБ</small>
+                        <div id="fileInfo" class="mt-2" style="display: none;">
+                            <div class="alert alert-info">
+                                <strong>Выбран файл:</strong> <span id="fileName"></span><br>
+                                <strong>Размер:</strong> <span id="fileSize"></span>
+                            </div>
+                        </div>
+                    </div>
 
                     <div class="d-grid gap-2">
                         <button type="submit" class="btn btn-primary" id="startButton">
@@ -188,6 +198,23 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // Обработка выбора файла
+    const attachmentFile = document.getElementById('attachmentFile');
+    const fileInfo = document.getElementById('fileInfo');
+    const fileName = document.getElementById('fileName');
+    const fileSize = document.getElementById('fileSize');
+
+    attachmentFile.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+            fileName.textContent = file.name;
+            fileSize.textContent = (file.size / (1024 * 1024)).toFixed(2) + ' МБ';
+            fileInfo.style.display = 'block';
+        } else {
+            fileInfo.style.display = 'none';
+        }
+    });
+
     // Отправка формы
     contactsCampaignForm.addEventListener('submit', async function(e) {
         e.preventDefault();
@@ -196,6 +223,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const message = document.getElementById('message').value;
         const delaySeconds = parseInt(document.getElementById('delaySeconds').value);
         const startInMinutes = document.getElementById('startInMinutes').value;
+        const file = attachmentFile.files[0];
 
         if (!accountId || !message) {
             alert('Заполните все обязательные поля');
@@ -213,6 +241,9 @@ document.addEventListener('DOMContentLoaded', function() {
             formData.append('delay_seconds', delaySeconds);
             if (startInMinutes) {
                 formData.append('start_in_minutes', startInMinutes);
+            }
+            if (file) {
+                formData.append('attachment', file);
             }
 
             const response = await fetch('/api/contacts-campaign/start', {

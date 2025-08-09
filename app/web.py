@@ -416,6 +416,7 @@ async def start_contacts_campaign(
     message: str = Form(...),
     delay_seconds: int = Form(5),
     start_in_minutes: Optional[int] = Form(None),
+    attachment: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db)
 ):
     """Создание и запуск кампании рассылки по контактам"""
@@ -428,8 +429,38 @@ async def start_contacts_campaign(
         if not account or not account.is_active:
             return JSONResponse({"status": "error", "message": "Аккаунт неактивен или не найден"})
 
+        # Обрабатываем загруженный файл
+        attachment_path = None
+        if attachment and attachment.filename:
+            try:
+                # Читаем содержимое файла
+                content = await attachment.read()
+                
+                # Проверяем размер файла
+                if len(content) > 50 * 1024 * 1024:  # 50MB
+                    return JSONResponse({"status": "error", "message": "Файл слишком большой. Максимальный размер: 50 МБ"})
+
+                # Создаем папку uploads если её нет
+                os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+                # Генерируем уникальное имя файла
+                import uuid
+                file_extension = os.path.splitext(attachment.filename)[1]
+                unique_filename = f"{uuid.uuid4()}{file_extension}"
+                attachment_path = os.path.join(UPLOADS_DIR, unique_filename)
+
+                # Сохраняем файл
+                with open(attachment_path, "wb") as f:
+                    f.write(content)
+
+                print(f"✓ Файл сохранён для рассылки: {attachment_path} ({len(content)} байт)")
+
+            except Exception as file_error:
+                print(f"Ошибка сохранения файла: {str(file_error)}")
+                return JSONResponse({"status": "error", "message": f"Ошибка сохранения файла: {str(file_error)}"})
+
         result = await message_sender.start_contacts_campaign(
-            account_id, message, delay_seconds, start_in_minutes, None
+            account_id, message, delay_seconds, start_in_minutes, attachment_path
         )
 
         return JSONResponse(result)

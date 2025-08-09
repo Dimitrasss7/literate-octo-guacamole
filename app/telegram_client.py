@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from pyrogram import Client
-from pyrogram.errors import FloodWait, SessionPasswordNeeded, PhoneCodeInvalid
+from pyrogram.errors import FloodWait, SessionPasswordNeeded, PhoneCodeInvalid, UserIsBlocked, PeerIdInvalid, ChatWriteForbidden
 from cryptography.fernet import Fernet
 from sqlalchemy.orm import Session
 from app.database import Account, Campaign, SendLog, get_db
@@ -368,7 +368,7 @@ class TelegramManager:
                     first_name = getattr(contact, 'first_name', '') or ""
                     last_name = getattr(contact, 'last_name', '') or ""
                     username = getattr(contact, 'username', '') or ""
-                    
+
                     contact_data = {
                         "id": contact.id,
                         "first_name": first_name,
@@ -558,278 +558,158 @@ class TelegramManager:
             print(f"Error disconnecting client {account_id}: {e}")
         return False
 
-    async def send_message(self, account_id: int, recipient: str, message: str, file_path: Optional[str] = None, 
-                          schedule_seconds: int = 0) -> Dict:
-        """Отправка сообщения через указанный аккаунт с использованием встроенного планировщика Telegram"""
-        print(f"Планирование сообщения в {recipient} от аккаунта {account_id}")
-        
-        if schedule_seconds > 0:
-            print(f"Сообщение будет запланировано в Telegram на отправку через {schedule_seconds} секунд")
-        else:
-            print(f"Сообщение будет отправлено немедленно")
-
+    async def _resolve_peer(self, client: Client, recipient: str) -> Optional[str]:
+        """Разрешает получателя в chat_id"""
         try:
-            # Получаем клиент для аккаунта
-            client = await self._get_client_for_account(account_id)
+            # Если это уже числовой ID или группа/канал с типом -100..., используем как есть
+            if recipient.isdigit() or (recipient.startswith('-') and recipient[1:].isdigit()):
+                return recipient
+            
+            # Если это username, пробуем получить информацию о пользователе/чате
+            if recipient.startswith('@'):
+                recipient = recipient[1:] # Убираем @
+
+            try:
+                # Пробуем получить пользователя по username
+                user = await client.get_users(recipient)
+                if user:
+                    return str(user.id)
+            except:
+                pass # Не нашли пользователя, пробуем чат
+
+            try:
+                # Пробуем получить чат по username
+                chat = await client.get_chat(recipient)
+                if chat:
+                    return str(chat.id)
+            except:
+                pass # Не нашли чат
+
+            # Если получатель не является username, пробуем найти его по номеру телефона
+            if not recipient.startswith('@') and not recipient.startswith('+') and recipient.isdigit():
+                try:
+                    user = await client.get_user_by_phone_number(f"+{recipient}") # Добавляем + для номера
+                    if user:
+                        return str(user.id)
+                except:
+                    pass
+
+            return None # Не удалось разрешить получателя
+
+        except Exception as e:
+            print(f"Ошибка разрешения получателя {recipient}: {e}")
+            return None
+
+    async def send_file(self, account_id: int, chat_id: str, file_path: str, 
+                        caption: str = "", schedule_seconds: int = 0) -> Dict:
+        """Улучшенная отправка файлов с поддержкой APK и больших файлов"""
+        try:
+            if not os.path.exists(file_path):
+                return {"status": "error", "message": "Файл не найден"}
+
+            client = await self.get_simple_client(account_id)
             if not client:
-                return {"status": "error", "message": "Клиент не найден"}
+                return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
 
-            # Проверяем подключение клиента
-            try:
-                if not client.is_connected:
-                    await client.connect()
-                
-                # Проверяем, что клиент действительно авторизован
-                me = await client.get_me()
-                print(f"Отправка от: {me.first_name}")
-            except Exception as conn_error:
-                print(f"Ошибка подключения клиента: {conn_error}")
-                return {"status": "error", "message": f"Ошибка подключения: {conn_error}"}
+            file_size = os.path.getsize(file_path)
+            file_name = os.path.basename(file_path)
+
+            print(f"Отправляем файл: {file_name} ({file_size} байт) в чат {chat_id}")
+
+            # Планируем отправку если нужно
+            schedule_date = None
+            if schedule_seconds > 0:
+                schedule_date = datetime.now() + timedelta(seconds=schedule_seconds)
 
             try:
-                # Если это username, добавляем @ если его нет
-                if not recipient.startswith('@') and not recipient.startswith('+') and not recipient.isdigit() and not recipient.startswith('-'):
-                    recipient = f"@{recipient}"
-
-                # Используем встроенный планировщик Telegram для отложенных сообщений
-                from datetime import datetime, timedelta
-                
-                # Рассчитываем время отправки через Telegram планировщик
-                if schedule_seconds > 0:
-                    # Добавляем минимальную задержку в 30 секунд, так как Telegram требует это для планирования
-                    min_delay = max(30, schedule_seconds)
-                    schedule_date = datetime.utcnow() + timedelta(seconds=min_delay)
-                    print(f"Сообщение будет запланировано в Telegram на: {schedule_date} (через {min_delay} секунд)")
-                else:
-                    # Для немедленной отправки не используем планировщик
-                    schedule_date = None
-                    print(f"Сообщение будет отправлено немедленно")
-
-                # Отправляем сообщение через встроенный планировщик Telegram
-                sent_message = None
-                try:
-                    if file_path and os.path.exists(file_path):
-                        # Проверяем размер файла
-                        file_size = os.path.getsize(file_path)
-                        print(f"Размер файла: {file_size} байт")
-                        
-                        if file_size == 0:
-                            print(f"⚠️ Файл {file_path} пустой (0 байт), пропускаем отправку файла")
-                            # Отправляем только текст
-                            if message:
-                                if schedule_date:
-                                    sent_message = await client.send_message(
-                                        chat_id=recipient,
-                                        text=f"{message}\n\n[Файл повреждён или пуст]",
-                                        schedule_date=schedule_date
-                                    )
-                                else:
-                                    sent_message = await client.send_message(
-                                        chat_id=recipient,
-                                        text=f"{message}\n\n[Файл повреждён или пуст]"
-                                    )
-                                print(f"✓ Отправлено только текстовое сообщение (файл пуст)")
-                            else:
-                                raise Exception("Файл пуст и нет текста для отправки")
-                        elif file_size > 50 * 1024 * 1024:  # 50MB лимит Telegram
-                            print(f"⚠️ Файл слишком большой: {file_size} байт (лимит 50MB)")
-                            # Отправляем только текст
-                            if message:
-                                if schedule_date:
-                                    sent_message = await client.send_message(
-                                        chat_id=recipient,
-                                        text=f"{message}\n\n[Файл слишком большой для отправки через Telegram]",
-                                        schedule_date=schedule_date
-                                    )
-                                else:
-                                    sent_message = await client.send_message(
-                                        chat_id=recipient,
-                                        text=f"{message}\n\n[Файл слишком большой для отправки через Telegram]"
-                                    )
-                                print(f"✓ Отправлено только текстовое сообщение (файл слишком большой)")
-                            else:
-                                raise Exception("Файл слишком большой и нет текста для отправки")
-                        else:
-                            # Файл нормального размера, пытаемся отправить
-                            file_extension = os.path.splitext(file_path)[1].lower()
-                            print(f"Отправка файла: {file_path} (расширение: {file_extension}, размер: {file_size} байт)")
-                            
-                            # Определяем методы отправки по типу файла
-                            image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
-                            video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v']
-                            
-                            if file_extension in image_extensions:
-                                # Для изображений пробуем send_photo, потом send_document
-                                send_methods = [
-                                    ('photo', client.send_photo),
-                                    ('document', client.send_document)
-                                ]
-                            elif file_extension in video_extensions:
-                                # Для видео пробуем send_video, потом send_document
-                                send_methods = [
-                                    ('video', client.send_video),
-                                    ('document', client.send_document)
-                                ]
-                            else:
-                                # Для APK и других файлов используем только send_document
-                                send_methods = [
-                                    ('document', client.send_document)
-                                ]
-                            
-                            # Пытаемся отправить файл
-                            file_sent = False
-                            last_error = None
-                            
-                            for method_name, method in send_methods:
-                                try:
-                                    print(f"Попытка отправить файл как {method_name}")
-                                    
-                                    # Готовим параметры для отправки
-                                    if method_name == 'photo':
-                                        kwargs = {'photo': file_path, 'caption': message}
-                                    elif method_name == 'video':
-                                        kwargs = {'video': file_path, 'caption': message}
-                                    else:  # document
-                                        kwargs = {'document': file_path, 'caption': message}
-                                    
-                                    # Добавляем schedule_date если нужно
-                                    if schedule_date:
-                                        kwargs['schedule_date'] = schedule_date
-                                    
-                                    # Отправляем файл
-                                    sent_message = await method(chat_id=recipient, **kwargs)
-                                    
-                                    if schedule_date:
-                                        print(f"✓ Файл успешно запланирован к отправке как {method_name} через Telegram на {schedule_date}")
-                                    else:
-                                        print(f"✓ Файл успешно отправлен как {method_name}")
-                                    
-                                    file_sent = True
-                                    break  # Успешно отправлено
-                                    
-                                except Exception as method_error:
-                                    error_str = str(method_error)
-                                    print(f"Не удалось отправить как {method_name}: {error_str}")
-                                    last_error = method_error
-                                    
-                                    # Проверяем критические ошибки
-                                    if any(err in error_str for err in ["PEER_FLOOD", "USER_IS_BLOCKED", "CHAT_WRITE_FORBIDDEN", "USER_INVALID", "PEER_ID_INVALID"]):
-                                        print(f"Критическая ошибка: {error_str}")
-                                        raise method_error
-                            
-                            # Если файл не удалось отправить ни одним способом
-                            if not file_sent:
-                                print(f"⚠️ Не удалось отправить файл {recipient} ни одним способом")
-                                
-                                # Отправляем только текст если есть
-                                if message:
-                                    try:
-                                        if schedule_date:
-                                            sent_message = await client.send_message(
-                                                chat_id=recipient,
-                                                text=f"{message}\n\n[Файл не удалось отправить - {str(last_error)[:100]}]",
-                                                schedule_date=schedule_date
-                                            )
-                                        else:
-                                            sent_message = await client.send_message(
-                                                chat_id=recipient,
-                                                text=f"{message}\n\n[Файл не удалось отправить - {str(last_error)[:100]}]"
-                                            )
-                                        print(f"✓ Отправлен только текст (файл пропущен) для {recipient}")
-                                    except Exception as text_error:
-                                        print(f"Не удалось отправить даже текст: {text_error}")
-                                        raise text_error
-                                else:
-                                    # Если нет текста, поднимаем ошибку
-                                    raise last_error if last_error else Exception("Не удалось отправить файл")
-                    else:
-                        # Отправляем только текстовое сообщение
-                        if schedule_date:
-                            sent_message = await client.send_message(
-                                chat_id=recipient,
-                                text=message,
-                                schedule_date=schedule_date
-                            )
-                            print(f"✓ Текстовое сообщение успешно запланировано через Telegram на {schedule_date}")
-                        else:
-                            sent_message = await client.send_message(
-                                chat_id=recipient,
-                                text=message
-                            )
-                            print(f"✓ Текстовое сообщение отправлено немедленно")
-                except Exception as send_error:
-                    error_str = str(send_error)
-                    print(f"Финальная ошибка при отправке: {error_str}")
-                    
-                    # Обработка специфических ошибок
-                    if "'NoneType' object has no attribute 'is_premium'" in error_str:
-                        print(f"Пользователь {recipient} недоступен из-за проблем с API")
-                        return {"status": "error", "message": f"Пользователь недоступен или заблокирован"}
-                    elif "USER_INVALID" in error_str or "PEER_ID_INVALID" in error_str:
-                        print(f"Пользователь {recipient} не найден или недоступен")
-                        return {"status": "error", "message": f"Пользователь не найден или недоступен"}
-                    
-                    raise send_error
-
-                # Обновляем статистику аккаунта
-                await self._update_account_stats(account_id)
-
-                # Безопасное получение информации о сообщении
-                message_id = None
-                chat_id = None
-                
-                try:
-                    if sent_message:
-                        # Получаем ID сообщения
-                        message_id = getattr(sent_message, 'id', None)
-                        print(f"Message ID: {message_id}")
-                        
-                        # Получаем chat_id из recipient, так как это самый надежный способ
-                        try:
-                            if recipient.isdigit():
-                                chat_id = int(recipient)
-                            elif recipient.startswith('-') and recipient[1:].isdigit():
-                                chat_id = int(recipient)
-                            else:
-                                chat_id = recipient
-                            print(f"Chat ID from recipient: {chat_id}")
-                        except:
-                            chat_id = recipient
-                        
-                        print(f"Final message_id: {message_id}, chat_id: {chat_id}")
-                
-                except Exception as parse_error:
-                    print(f"Ошибка при парсинге результата сообщения: {parse_error}")
-                    # Продолжаем выполнение, даже если не удалось получить детали
-                    message_id = None
-                    chat_id = recipient
+                # Отправляем как документ с форсированием (для APK и других файлов)
+                sent_msg = await client.send_document(
+                    chat_id=chat_id,
+                    document=file_path,
+                    caption=caption,
+                    force_document=True,  # Принудительно как документ
+                    schedule_date=schedule_date
+                )
 
                 return {
                     "status": "success",
-                    "message_id": message_id,
-                    "chat_id": chat_id
+                    "message_id": sent_msg.id,
+                    "file_name": file_name,
+                    "file_size": file_size,
+                    "scheduled": schedule_seconds > 0
                 }
 
             except Exception as e:
                 error_msg = str(e)
-                print(f"Ошибка отправки сообщения: {error_msg}")
-                
-                # Обработка специфических ошибок
-                if "PEER_ID_INVALID" in error_msg:
-                    return {"status": "error", "message": f"Пользователь {recipient} не найден или недоступен"}
-                elif "USER_IS_BLOCKED" in error_msg:
-                    return {"status": "error", "message": f"Пользователь {recipient} заблокировал бота"}
-                elif "CHAT_WRITE_FORBIDDEN" in error_msg:
-                    return {"status": "error", "message": f"Нет прав для записи в чат {recipient}"}
-                elif "'NoneType' object has no attribute 'is_premium'" in error_msg:
-                    return {"status": "error", "message": f"Пользователь {recipient} недоступен или заблокирован"}
-                else:
-                    return {"status": "error", "message": error_msg}
+                print(f"Ошибка отправки файла {file_name} в {chat_id}: {error_msg}")
+                return {"status": "error", "message": f"Ошибка отправки файла: {error_msg}"}
 
         except Exception as e:
-            error_msg = str(e)
-            print(f"Общая ошибка отправки сообщения: {error_msg}")
-            return {"status": "error", "message": error_msg}
+            return {"status": "error", "message": f"Общая ошибка отправки файла: {str(e)}"}
+
+    async def send_message(self, account_id: int, recipient: str, message: str, 
+                          attachment_path: Optional[str] = None, schedule_seconds: int = 0) -> Dict:
+        """Отправка сообщения с возможностью прикрепления файла"""
+        try:
+            client = await self.get_simple_client(account_id)
+            if not client:
+                return {"status": "error", "message": "Не удалось подключиться к аккаунту"}
+
+            # Обрабатываем получателя
+            chat_id = await self._resolve_peer(client, recipient)
+            if not chat_id:
+                return {"status": "error", "message": f"Не удалось найти получателя: {recipient}"}
+
+            try:
+                if attachment_path and os.path.exists(attachment_path):
+                    # Используем улучшенный метод отправки файлов
+                    return await self.send_file(account_id, chat_id, attachment_path, message, schedule_seconds)
+                else:
+                    # Отправляем только текст
+                    if schedule_seconds > 0:
+                        # Планируем отправку текста
+                        schedule_date = datetime.now() + timedelta(seconds=schedule_seconds)
+
+                        sent_msg = await client.send_message(
+                            chat_id=chat_id,
+                            text=message,
+                            schedule_date=schedule_date
+                        )
+                    else:
+                        # Отправляем сразу
+                        sent_msg = await client.send_message(
+                            chat_id=chat_id,
+                            text=message
+                        )
+
+                    return {
+                        "status": "success",
+                        "message_id": sent_msg.id,
+                        "chat_id": chat_id,
+                        "scheduled": schedule_seconds > 0
+                    }
+
+            except FloodWait as e:
+                print(f"Rate limit hit: {e.value} seconds")
+                return {"status": "error", "message": f"Превышен лимит запросов. Ждите {e.value} секунд"}
+
+            except UserIsBlocked:
+                return {"status": "error", "message": "Пользователь заблокировал бота"}
+
+            except PeerIdInvalid:
+                return {"status": "error", "message": "Неверный ID получателя"}
+
+            except ChatWriteForbidden:
+                return {"status": "error", "message": "Запрещено писать в этот чат"}
+
+            except Exception as send_error:
+                error_msg = str(send_error)
+                print(f"Send error to {recipient} ({chat_id}): {error_msg}")
+                return {"status": "error", "message": error_msg}
+
+        except Exception as e:
+            print(f"General error in send_message: {str(e)}")
+            return {"status": "error", "message": str(e)}
 
     async def _update_account_stats(self, account_id: int):
         """Обновление статистики аккаунта"""
@@ -852,7 +732,7 @@ class TelegramManager:
         finally:
             db.close()
 
-    async def get_client(self, account_id: int) -> Optional[Client]:
+    async def get_simple_client(self, account_id: int) -> Optional[Client]:
         """Вспомогательная функция для получения клиента (переименована для соответствия изменениям)"""
         return await self._get_client_for_account(account_id)
 

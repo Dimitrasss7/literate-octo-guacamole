@@ -41,8 +41,18 @@ class TelegramManager:
     async def add_account(self, phone: str, proxy: Optional[str] = None) -> Dict:
         """Добавление нового аккаунта"""
         try:
-            session_name = f"session_{phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')}"
+            # Очищаем номер телефона
+            clean_phone = phone.replace('+', '').replace(' ', '').replace('(', '').replace(')', '').replace('-', '')
+            session_name = f"session_{clean_phone}"
             session_path = os.path.join(SESSIONS_DIR, session_name)
+
+            # Удаляем старую сессию если есть
+            old_session_file = f"{session_path}.session"
+            if os.path.exists(old_session_file):
+                try:
+                    os.remove(old_session_file)
+                except:
+                    pass
 
             client = Client(
                 session_path,
@@ -50,9 +60,9 @@ class TelegramManager:
                 api_hash=API_HASH,
                 phone_number=phone,
                 proxy=self._parse_proxy(proxy) if proxy else None,
-                sleep_threshold=60,
+                sleep_threshold=30,
                 max_concurrent_transmissions=1,
-                in_memory=True
+                no_updates=True
             )
 
             await client.connect()
@@ -64,8 +74,13 @@ class TelegramManager:
                 return {"status": "success", "name": me.first_name}
             except:
                 try:
+                    # Отправляем код с задержкой
+                    await asyncio.sleep(1)
                     sent_code = await client.send_code(phone)
                     self.pending_clients[session_name] = client
+                    
+                    print(f"Код отправлен на {phone}, hash: {sent_code.phone_code_hash}")
+                    
                     return {
                         "status": "code_required",
                         "phone_code_hash": sent_code.phone_code_hash,
@@ -73,7 +88,10 @@ class TelegramManager:
                     }
                 except Exception as send_error:
                     await client.disconnect()
-                    return {"status": "error", "message": f"Ошибка отправки кода: {str(send_error)}"}
+                    error_msg = str(send_error)
+                    if "flood" in error_msg.lower():
+                        return {"status": "error", "message": "Слишком много попыток. Попробуйте позже"}
+                    return {"status": "error", "message": f"Ошибка отправки кода: {error_msg}"}
 
         except Exception as e:
             return {"status": "error", "message": str(e)}
@@ -81,6 +99,12 @@ class TelegramManager:
     async def verify_code(self, phone: str, code: str, phone_code_hash: str, session_name: str, proxy: Optional[str] = None):
         """Подтверждение кода из SMS"""
         try:
+            # Очищаем код от лишних символов и пробелов
+            clean_code = ''.join(filter(str.isdigit, code.strip()))
+            
+            if len(clean_code) != 5:
+                return {"status": "error", "message": "Код должен содержать ровно 5 цифр"}
+
             client = self.pending_clients.get(session_name)
 
             if not client:
@@ -95,7 +119,16 @@ class TelegramManager:
                 )
                 await client.connect()
 
-            await client.sign_in(phone, phone_code_hash, code)
+            # Дополнительная задержка перед попыткой входа
+            await asyncio.sleep(1)
+            
+            try:
+                await client.sign_in(phone, phone_code_hash, clean_code)
+            except Exception as sign_in_error:
+                # Если первая попытка не удалась, попробуем еще раз через несколько секунд
+                await asyncio.sleep(3)
+                await client.sign_in(phone, phone_code_hash, clean_code)
+            
             me = await client.get_me()
 
             session_path = os.path.join(SESSIONS_DIR, session_name)
@@ -113,12 +146,12 @@ class TelegramManager:
             print(f"Ошибка при верификации кода: {str(e)}")
 
             if "phone_code_invalid" in error_msg or "invalid code" in error_msg:
-                return {"status": "error", "message": "Неверный код подтверждения"}
+                return {"status": "error", "message": "Неверный код или код истёк. Попробуйте запросить новый код"}
             elif "phone_code_expired" in error_msg or "expired" in error_msg:
                 return {"status": "error", "message": "Код истёк. Запросите новый код через форму добавления аккаунта"}
             elif "phone_code_empty" in error_msg or "empty" in error_msg:
                 return {"status": "error", "message": "Код не может быть пустым"}
-            elif "password" in error_msg or "2fa" in error_msg:
+            elif "session_password_needed" in error_msg or "password" in error_msg or "2fa" in error_msg:
                 return {
                     "status": "password_required",
                     "message": "Требуется пароль двухфакторной аутентификации",
@@ -127,7 +160,7 @@ class TelegramManager:
             elif "flood" in error_msg:
                 return {"status": "error", "message": "Слишком много попыток. Попробуйте позже"}
             else:
-                return {"status": "error", "message": f"Ошибка при подтверждении: {str(e)}"}
+                return {"status": "error", "message": f"Попробуйте запросить новый код. Детали: {str(e)}"}
 
     async def verify_password(self, phone: str, password: str, session_name: str, proxy: Optional[str] = None) -> Dict:
         """Подтверждение двухфакторной аутентификации"""

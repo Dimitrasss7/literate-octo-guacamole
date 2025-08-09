@@ -80,19 +80,25 @@ async def verify_code(
 ):
     """Подтверждение кода"""
     try:
+        # Очищаем код от лишних символов
+        clean_code = ''.join(filter(str.isdigit, code.strip()))
+        
         # Валидация входных данных
-        if not code or len(code.strip()) == 0:
+        if not clean_code:
             return JSONResponse({"status": "error", "message": "Код не может быть пустым"})
 
-        if len(code.strip()) != 5:
-            return JSONResponse({"status": "error", "message": "Код должен содержать 5 цифр"})
+        if len(clean_code) != 5:
+            return JSONResponse({"status": "error", "message": f"Код должен содержать ровно 5 цифр, получено: {len(clean_code)}"})
 
-        result = await telegram_manager.verify_code(phone, code.strip(), phone_code_hash, session_name, proxy)
+        print(f"Проверяем код: '{clean_code}' для номера {phone}")
+        
+        result = await telegram_manager.verify_code(phone, clean_code, phone_code_hash, session_name, proxy)
 
         # Проверяем, что result не None
         if result is None:
             result = {"status": "error", "message": "Внутренняя ошибка сервера"}
 
+        print(f"Результат проверки кода: {result}")
         return JSONResponse(result)
 
     except Exception as e:
@@ -103,6 +109,8 @@ async def verify_code(
         with open("unknown_errors.txt", "a", encoding="utf-8") as f:
             f.write(f"Web verify code error: {error_msg}\n")
             f.write(f"Phone: {phone}\n")
+            f.write(f"Code: {code}\n")
+            f.write(f"Clean code: {clean_code if 'clean_code' in locals() else 'N/A'}\n")
             f.write(f"Exception type: {type(e).__name__}\n")
             f.write("---\n")
 

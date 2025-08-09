@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import Account, Campaign, SendLog, get_db
 from app.telegram_client import telegram_manager
 from app.sender import message_sender
+from app.proxy_manager import proxy_manager
 from app.config import UPLOADS_DIR
 
 app = FastAPI(title="Telegram Mass Sender")
@@ -58,8 +59,14 @@ async def accounts_page(request: Request, db: Session = Depends(get_db)):
     })
 
 @app.post("/accounts/add")
-async def add_account(phone: str = Form(...), proxy: Optional[str] = Form(None)):
+async def add_account(phone: str = Form(...), use_auto_proxy: bool = Form(False)):
     """Добавление нового аккаунта"""
+    proxy = None
+    if use_auto_proxy:
+        proxy = proxy_manager.get_proxy_for_phone(phone)
+        if not proxy:
+            return JSONResponse({"status": "error", "message": "Нет доступных прокси. Загрузите список прокси."})
+    
     result = await telegram_manager.add_account(phone, proxy)
     return JSONResponse(result)
 
@@ -201,6 +208,40 @@ async def logs_page(request: Request, db: Session = Depends(get_db)):
         "logs": logs
     })
 
+@app.get("/proxies", response_class=HTMLResponse)
+async def proxies_page(request: Request):
+    """Страница управления прокси"""
+    return templates.TemplateResponse("proxies.html", {
+        "request": request,
+        "proxies_count": proxy_manager.get_available_proxies_count(),
+        "used_count": proxy_manager.get_used_proxies_count(),
+        "proxies": proxy_manager.get_all_proxies()
+    })
+
+@app.post("/proxies/upload")
+async def upload_proxies(proxies_text: str = Form(...)):
+    """Загрузка списка прокси"""
+    try:
+        proxy_manager.save_proxies(proxies_text)
+        return JSONResponse({
+            "status": "success", 
+            "message": f"Загружено {proxy_manager.get_available_proxies_count()} прокси"
+        })
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)})
+
+@app.delete("/accounts/{account_id}")
+async def delete_account(account_id: int, db: Session = Depends(get_db)):
+    """Удаление аккаунта"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if account:
+        # Освобождаем прокси для этого номера
+        proxy_manager.clear_proxy_for_phone(account.phone)
+        db.delete(account)
+        db.commit()
+        return JSONResponse({"status": "success"})
+    return JSONResponse({"status": "error", "message": "Аккаунт не найден"})
+
 @app.get("/api/stats")
 async def get_stats(db: Session = Depends(get_db)):
     """API для получения статистики"""
@@ -219,5 +260,9 @@ async def get_stats(db: Session = Depends(get_db)):
         },
         "messages_today": db.query(SendLog).filter(
             SendLog.sent_at >= datetime.utcnow().date()
-        ).count()
+        ).count(),
+        "proxies": {
+            "total": proxy_manager.get_available_proxies_count(),
+            "used": proxy_manager.get_used_proxies_count()
+        }
     })

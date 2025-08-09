@@ -1,4 +1,3 @@
-
 {% extends "base.html" %}
 
 {% block title %}Аккаунты - Telegram Mass Sender{% endblock %}
@@ -40,7 +39,7 @@
                 <td>{{ account.messages_sent_today }}</td>
                 <td>{{ account.last_activity.strftime('%d.%m.%Y %H:%M') if account.last_activity else '-' }}</td>
                 <td>
-                    <button class="btn btn-sm btn-{% if account.is_active %}warning{% else %}success{% endif %}" 
+                    <button class="btn btn-sm btn-{% if account.is_active %}warning{% else %}success{% endif %}"
                             onclick="toggleAccount({{ account.id }})">
                         {% if account.is_active %}Отключить{% else %}Включить{% endif %}
                     </button>
@@ -69,9 +68,17 @@
                         <input type="text" class="form-control" name="phone" placeholder="+7xxxxxxxxxx" required>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Прокси (опционально)</label>
-                        <input type="text" class="form-control" name="proxy" placeholder="socks5://user:pass@host:port">
-                    </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="useAutoProxy" name="use_auto_proxy" value="true">
+                                <label class="form-check-label" for="useAutoProxy">
+                                    Использовать автоматический прокси из загруженного списка
+                                </label>
+                            </div>
+                            <div class="form-text">
+                                <a href="/proxies" target="_blank">Управление прокси</a> -
+                                автоматически назначит прокси из загруженного списка
+                            </div>
+                        </div>
                 </form>
             </div>
             <div class="modal-footer">
@@ -139,7 +146,13 @@
 function addAccount() {
     const form = document.getElementById('addAccountForm');
     const formData = new FormData(form);
-    
+
+    // Если чекбокс "Использовать автоматический прокси" не отмечен, удаляем его из formData
+    if (!formData.get('use_auto_proxy')) {
+        formData.delete('use_auto_proxy');
+    }
+
+
     fetch('/accounts/add', {
         method: 'POST',
         body: formData
@@ -152,8 +165,10 @@ function addAccount() {
             codeForm.phone.value = formData.get('phone');
             codeForm.phone_code_hash.value = data.phone_code_hash;
             codeForm.session_name.value = data.session_name;
-            codeForm.proxy.value = formData.get('proxy') || '';
-            
+            // Передаем значение use_auto_proxy, если оно есть
+            codeForm.proxy.value = formData.get('use_auto_proxy') ? 'auto' : formData.get('proxy') || '';
+
+
             // Показываем модальное окно ввода кода
             new bootstrap.Modal(document.getElementById('codeModal')).show();
             bootstrap.Modal.getInstance(document.getElementById('addAccountModal')).hide();
@@ -172,7 +187,7 @@ function addAccount() {
 function verifyCode() {
     const form = document.getElementById('codeForm');
     const formData = new FormData(form);
-    
+
     fetch('/accounts/verify_code', {
         method: 'POST',
         body: formData
@@ -184,8 +199,8 @@ function verifyCode() {
             const passwordForm = document.getElementById('passwordForm');
             passwordForm.phone.value = formData.get('phone');
             passwordForm.session_name.value = data.session_name;
-            passwordForm.proxy.value = formData.get('proxy') || '';
-            
+            passwordForm.proxy.value = formData.get('proxy') || ''; // Сохраняем proxy, если оно было указано вручную
+
             // Показываем модальное окно ввода пароля
             new bootstrap.Modal(document.getElementById('passwordModal')).show();
             bootstrap.Modal.getInstance(document.getElementById('codeModal')).hide();
@@ -204,7 +219,7 @@ function verifyCode() {
 function verifyPassword() {
     const form = document.getElementById('passwordForm');
     const formData = new FormData(form);
-    
+
     fetch('/accounts/verify_password', {
         method: 'POST',
         body: formData

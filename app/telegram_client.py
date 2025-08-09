@@ -14,6 +14,7 @@ from app.config import API_ID, API_HASH, SESSIONS_DIR, ENCRYPTION_KEY
 class TelegramManager:
     def __init__(self):
         self.clients: Dict[int, Client] = {}
+        self.pending_clients: Dict[str, Client] = {}  # Для хранения клиентов ожидающих код
         self.cipher = Fernet(ENCRYPTION_KEY)
     
     def encrypt_session(self, session_data: str) -> str:
@@ -53,7 +54,8 @@ class TelegramManager:
                 # Не авторизован - отправляем код
                 try:
                     sent_code = await client.send_code(phone)
-                    # НЕ отключаем клиент, чтобы сохранить сессию
+                    # Сохраняем клиент для использования при подтверждении кода
+                    self.pending_clients[session_name] = client
                     return {
                         "status": "code_required",
                         "phone_code_hash": sent_code.phone_code_hash,
@@ -69,20 +71,22 @@ class TelegramManager:
     async def verify_code(self, phone: str, code: str, phone_code_hash: str, session_name: str, proxy: Optional[str] = None) -> Dict:
         """Подтверждение кода авторизации"""
         try:
-            session_path = os.path.join(SESSIONS_DIR, session_name)
+            # Используем существующий клиент из pending_clients
+            client = self.pending_clients.get(session_name)
             
-            # Используем точно те же параметры, что и при отправке кода
-            client = Client(
-                session_path,
-                api_id=API_ID,
-                api_hash=API_HASH,
-                phone_number=phone,
-                proxy=self._parse_proxy(proxy) if proxy else None,
-                sleep_threshold=60,  # Увеличиваем время ожидания
-                max_concurrent_transmissions=1
-            )
-            
-            await client.connect()
+            if not client:
+                # Если клиента нет, создаем новый (резервный вариант)
+                session_path = os.path.join(SESSIONS_DIR, session_name)
+                client = Client(
+                    session_path,
+                    api_id=API_ID,
+                    api_hash=API_HASH,
+                    phone_number=phone,
+                    proxy=self._parse_proxy(proxy) if proxy else None,
+                    sleep_threshold=60,
+                    max_concurrent_transmissions=1
+                )
+                await client.connect()
             
             try:
                 # Убираем лишние пробелы и символы из кода
@@ -92,15 +96,23 @@ class TelegramManager:
                 if hasattr(signed_in, 'user'):
                     # Успешная авторизация
                     me = await client.get_me()
+                    session_path = os.path.join(SESSIONS_DIR, session_name)
                     await self._save_account(phone, session_path, me.first_name, proxy)
                     await client.disconnect()
+                    # Удаляем из pending_clients
+                    if session_name in self.pending_clients:
+                        del self.pending_clients[session_name]
                     return {"status": "success", "name": me.first_name}
                     
             except SessionPasswordNeeded:
-                await client.disconnect()
+                # Сохраняем клиент для ввода пароля
                 return {"status": "password_required", "session_name": session_name}
             except Exception as sign_in_error:
                 await client.disconnect()
+                # Удаляем из pending_clients при ошибке
+                if session_name in self.pending_clients:
+                    del self.pending_clients[session_name]
+                    
                 error_msg = str(sign_in_error).upper()
                 
                 if "PHONE_CODE_EXPIRED" in error_msg:
@@ -115,31 +127,46 @@ class TelegramManager:
                     return {"status": "error", "message": f"Ошибка авторизации: {sign_in_error}"}
             
         except Exception as e:
+            # Удаляем из pending_clients при общей ошибке
+            if session_name in self.pending_clients:
+                del self.pending_clients[session_name]
             return {"status": "error", "message": f"Ошибка соединения: {str(e)}"}
     
     async def verify_password(self, phone: str, password: str, session_name: str, proxy: Optional[str] = None) -> Dict:
         """Подтверждение двухфакторной аутентификации"""
         try:
-            session_path = os.path.join(SESSIONS_DIR, session_name)
+            # Используем существующий клиент из pending_clients
+            client = self.pending_clients.get(session_name)
             
-            client = Client(
-                session_path,
-                api_id=API_ID,
-                api_hash=API_HASH,
-                phone_number=phone,
-                proxy=self._parse_proxy(proxy) if proxy else None
-            )
+            if not client:
+                # Если клиента нет, создаем новый
+                session_path = os.path.join(SESSIONS_DIR, session_name)
+                client = Client(
+                    session_path,
+                    api_id=API_ID,
+                    api_hash=API_HASH,
+                    phone_number=phone,
+                    proxy=self._parse_proxy(proxy) if proxy else None
+                )
+                await client.connect()
             
-            await client.connect()
             await client.check_password(password)
             
             me = await client.get_me()
+            session_path = os.path.join(SESSIONS_DIR, session_name)
             await self._save_account(phone, session_path, me.first_name, proxy)
             await client.disconnect()
+            
+            # Удаляем из pending_clients
+            if session_name in self.pending_clients:
+                del self.pending_clients[session_name]
             
             return {"status": "success", "name": me.first_name}
             
         except Exception as e:
+            # Удаляем из pending_clients при ошибке
+            if session_name in self.pending_clients:
+                del self.pending_clients[session_name]
             return {"status": "error", "message": str(e)}
     
     async def _save_account(self, phone: str, session_path: str, name: str, proxy: Optional[str]):
